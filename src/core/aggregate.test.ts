@@ -1,0 +1,77 @@
+import { describe, it, expect } from 'vitest'
+import { buildSeries } from './aggregate'
+import type { Dataset } from './types'
+
+const ds: Dataset = {
+  commits: [
+    { sha: 'a', repo: 'Huub-NL/finview', authoredAt: '2026-05-04T10:00:00.000+02:00' },
+    { sha: 'b', repo: 'Huub-NL/finview', authoredAt: '2026-05-04T11:00:00.000+02:00' },
+    { sha: 'c', repo: 'markhinch/zen', authoredAt: '2026-05-05T09:00:00.000+02:00' },
+    // Three-month gap, then July.
+    { sha: 'd', repo: 'Huub-NL/finview', authoredAt: '2026-08-03T09:00:00.000+02:00' },
+  ],
+  mergedPrs: [
+    { repo: 'Huub-NL/finview', mergedAt: '2026-05-04T12:00:00Z', additions: 100, deletions: 20 },
+    { repo: 'markhinch/zen', mergedAt: '2026-05-06T12:00:00Z', additions: 5, deletions: 1 },
+  ],
+  meta: { syncedAt: '2026-08-31T00:00:00Z', rangeStart: '2026-01-01', rangeEnd: '2026-08-31' },
+}
+
+const allOrgs = new Set(['Huub-NL', 'markhinch'])
+
+describe('buildSeries — commits', () => {
+  it('counts commits per month', () => {
+    const s = buildSeries(ds, { bucket: 'month', metric: 'commits', orgs: allOrgs })
+    expect(s.map((p) => [p.key, p.value])).toEqual([
+      ['2026-05', 3],
+      ['2026-06', 0],
+      ['2026-07', 0],
+      ['2026-08', 1],
+    ])
+  })
+
+  it('fills empty buckets with zero rather than omitting them', () => {
+    const s = buildSeries(ds, { bucket: 'month', metric: 'commits', orgs: allOrgs })
+    expect(s.map((p) => p.key)).toContain('2026-06')
+    expect(s.find((p) => p.key === '2026-06')?.value).toBe(0)
+  })
+
+  it('counts commits per ISO week', () => {
+    const s = buildSeries(ds, { bucket: 'week', metric: 'commits', orgs: allOrgs })
+    // 4 and 5 May 2026 are both in ISO week 19; 3 Aug 2026 is in week 32.
+    expect(s[0]).toMatchObject({ key: '2026-W19', value: 3 })
+    expect(s[s.length - 1]).toMatchObject({ key: '2026-W32', value: 1 })
+    expect(s).toHaveLength(14)
+  })
+
+  it('excludes orgs that are not selected', () => {
+    const s = buildSeries(ds, { bucket: 'month', metric: 'commits', orgs: new Set(['markhinch']) })
+    expect(s.find((p) => p.key === '2026-05')?.value).toBe(1)
+  })
+
+  it('returns an empty series when no orgs are selected', () => {
+    expect(buildSeries(ds, { bucket: 'month', metric: 'commits', orgs: new Set() })).toEqual([])
+  })
+
+  it('returns an empty series for an empty dataset', () => {
+    const empty: Dataset = { ...ds, commits: [], mergedPrs: [] }
+    expect(buildSeries(empty, { bucket: 'month', metric: 'commits', orgs: allOrgs })).toEqual([])
+  })
+
+  it('attaches a human label', () => {
+    const s = buildSeries(ds, { bucket: 'month', metric: 'commits', orgs: allOrgs })
+    expect(s[0]?.label).toBe('May 2026')
+  })
+})
+
+describe('buildSeries — lines', () => {
+  it('sums additions and deletions as churn', () => {
+    const s = buildSeries(ds, { bucket: 'month', metric: 'lines', orgs: allOrgs })
+    expect(s).toEqual([{ key: '2026-05', label: 'May 2026', value: 126 }])
+  })
+
+  it('respects org selection', () => {
+    const s = buildSeries(ds, { bucket: 'month', metric: 'lines', orgs: new Set(['markhinch']) })
+    expect(s).toEqual([{ key: '2026-05', label: 'May 2026', value: 6 }])
+  })
+})
