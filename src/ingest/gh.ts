@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, type ExecFileException } from 'node:child_process'
 
 export class GhError extends Error {
   constructor(message: string, readonly stderr = '') {
@@ -7,11 +7,21 @@ export class GhError extends Error {
   }
 }
 
+/** The shape of `node:child_process`'s `execFile` that we depend on — swappable for tests. */
+type ExecFileFn = (
+  bin: string,
+  args: string[],
+  options: { maxBuffer: number },
+  callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+) => void
+
 interface GhOptions {
   /** Overridable for tests. */
   bin?: string
   /** Response bodies can be large; default 64 MB. */
   maxBuffer?: number
+  /** Process-spawning seam, overridable for tests. Defaults to the real `execFile`. */
+  exec?: ExecFileFn
 }
 
 /**
@@ -21,8 +31,9 @@ interface GhOptions {
  */
 export function ghJson<T>(args: string[], opts: GhOptions = {}): Promise<T> {
   const bin = opts.bin ?? 'gh'
+  const exec = opts.exec ?? execFile
   return new Promise<T>((resolve, reject) => {
-    execFile(bin, args, { maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+    exec(bin, args, { maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const enoent = (err as NodeJS.ErrnoException).code === 'ENOENT'
         reject(
@@ -45,10 +56,10 @@ export function ghJson<T>(args: string[], opts: GhOptions = {}): Promise<T> {
 }
 
 /** Fails fast with an actionable message if gh is missing or unauthenticated. */
-export async function assertGhReady(): Promise<void> {
+export async function assertGhReady(opts: GhOptions = {}): Promise<void> {
   let login: string
   try {
-    const viewer = await ghJson<{ login: string }>(['api', 'user', '--jq', '{login: .login}'])
+    const viewer = await ghJson<{ login: string }>(['api', 'user', '--jq', '{login: .login}'], opts)
     login = viewer.login
   } catch (err) {
     const detail = err instanceof GhError ? `${err.message}\n${err.stderr}` : String(err)
