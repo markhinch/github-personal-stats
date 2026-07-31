@@ -333,6 +333,101 @@ describe('collectWindow', () => {
       expect(calls).toEqual([1, 2, 3])
     })
 
+    /**
+     * Page 1 is not special to soft throttling, and it *is* special to this
+     * tool: it is the only page a small window ever requests, so a page 1 that
+     * was never retried meant one throttled response cost a whole extra 4-5
+     * minute run.
+     */
+    describe('on page 1', () => {
+      /** 250 results, but page 1 is empty the first `emptyTimes` times it is asked. */
+      const flakyFirstPage = (emptyTimes: number) => {
+        const all = Array.from({ length: 250 }, (_, i) => `c${i}`)
+        const calls: number[] = []
+        let seen = 0
+        const fetchPage: PageFetcher<string> = async (_w, page) => {
+          calls.push(page)
+          if (page === 1 && seen < emptyTimes) {
+            seen++
+            return { totalCount: 250, items: [] }
+          }
+          const from = (page - 1) * 100
+          return { totalCount: 250, items: all.slice(from, from + 100) }
+        }
+        return { fetchPage, calls }
+      }
+
+      it('is retried, and the whole window is still collected', async () => {
+        const { fetchPage, calls } = flakyFirstPage(1)
+        const retries: Array<{ page: number; attempt: number }> = []
+        const got: string[] = []
+        const result = await collectWindow({ start: '2026-01-01', end: '2026-01-31' }, fetchPage, {
+          onItems: async (items) => { got.push(...items) },
+          onEmptyPageRetry: (_w, page, attempt) => { retries.push({ page, attempt }) },
+        })
+        expect(new Set(got).size).toBe(250)
+        expect(result.complete).toBe(true)
+        expect(retries).toEqual([{ page: 1, attempt: 1 }])
+        // The probe, its one retry, then the remaining pages.
+        expect(calls).toEqual([1, 1, 2, 3])
+      })
+
+      it('reports the window incomplete — without hanging — when it stays empty', async () => {
+        const { fetchPage, calls } = flakyFirstPage(EMPTY_PAGE_RETRIES + 1)
+        const retries: number[] = []
+        const shortReads: Array<[number, number]> = []
+        const done = new Map<string, boolean>()
+        const result = await collectWindow({ start: '2026-01-01', end: '2026-01-31' }, fetchPage, {
+          onItems: async () => {},
+          onEmptyPageRetry: (_w, _page, attempt) => { retries.push(attempt) },
+          onShortRead: (_w, collected, expected) => { shortReads.push([collected, expected]) },
+          onDone: async (w, r) => { done.set(windowKey(w), r.complete) },
+        })
+        expect(result.complete).toBe(false)
+        expect(shortReads).toEqual([[0, 250]])
+        expect(done.get('2026-01-01..2026-01-31')).toBe(false)
+        // Bounded by the same budget as any other page: the probe plus its retries.
+        expect(retries).toEqual([1, 2])
+        expect(calls).toEqual([1, 1, 1])
+      })
+
+      it('is NOT retried for a genuinely empty window — that still costs one request', async () => {
+        const calls: number[] = []
+        const fetchPage: PageFetcher<string> = async (_w, page) => {
+          calls.push(page)
+          return { totalCount: 0, items: [] }
+        }
+        const retries: number[] = []
+        const result = await collectWindow({ start: '2015-01-01', end: '2015-12-31' }, fetchPage, {
+          onItems: async () => {},
+          onEmptyPageRetry: (_w, _page, attempt) => { retries.push(attempt) },
+        })
+        expect(calls).toEqual([1])
+        expect(retries).toEqual([])
+        expect(result.complete).toBe(true)
+      })
+
+      it('keeps the FIRST response\'s total_count, so a retry cannot rewrite the bar', async () => {
+        // A soft-throttled response is exactly the kind that would under-report
+        // the count. If a retry's smaller count governed, `expected` would drop
+        // to 0, the window would report complete, and a 250-result window would
+        // be cached as finished holding nothing.
+        const calls: number[] = []
+        const fetchPage: PageFetcher<string> = async (_w, page) => {
+          calls.push(page)
+          if (page === 1 && calls.filter((p) => p === 1).length === 1) {
+            return { totalCount: 250, items: [] }
+          }
+          return { totalCount: 0, items: [] } // the retry now claims the window is empty
+        }
+        const result = await collectWindow({ start: '2026-01-01', end: '2026-01-31' }, fetchPage, {
+          onItems: async () => {},
+          onEmptyPageRetry: () => {},
+        })
+        expect(result.complete).toBe(false)
+      })
+    })
+
     it('is not cached as done, so the next run re-reads it and self-heals', async () => {
       // The end-to-end shape of the original bug: throttled run loses items,
       // healthy run recovers them, because the loss was never marked finished.
@@ -361,6 +456,25 @@ describe('collectWindow', () => {
       expect(new Set(second.got).size).toBe(250)
       expect(cache.has(windowKey(w))).toBe(true)
     })
+  })
+
+  it('reports a window that split cleanly as COMPLETE, so resume can cache it', async () => {
+    // The true direction of the completeness AND, which nothing else pinned. If
+    // the recursive branch ever returned `complete: false` regardless, every
+    // over-cap month would be excluded from the resume cache forever and each
+    // sync would re-probe the entire history — slow and silent rather than wrong,
+    // which is exactly why it needs a test rather than a bug report.
+    const done = new Map<string, boolean>()
+    const { fetchPage } = fakeApi({ '2026-07-05': 700, '2026-07-20': 731 })
+    const w = { start: '2026-07-01', end: '2026-07-31' }
+    const result = await collectWindow(w, fetchPage, {
+      onItems: async () => {},
+      onDone: async (x, r) => { done.set(windowKey(x), r.complete) },
+    })
+    expect(result.complete).toBe(true)
+    expect(done.get(windowKey(w))).toBe(true)
+    // Nothing anywhere in the tree was incomplete.
+    expect([...done.values()].every((c) => c)).toBe(true)
   })
 
   it('marks a window complete only after it is fully collected', async () => {

@@ -142,6 +142,11 @@ interface PageThroughResult {
  * is returned rather than hidden — the caller turns that into
  * `complete: false`, which keeps the window out of the resume cache so the next
  * run re-reads it.
+ *
+ * Page 1 is retried on exactly the same terms as any later page. Soft throttling
+ * does not skip the first page, and page 1 is the *only* page a small window ever
+ * requests — so excluding it meant a single throttled response cost a whole extra
+ * 4-5 minute run where one re-requested page would have done.
  */
 async function pageThrough<T>(
   w: DateWindow,
@@ -149,18 +154,34 @@ async function pageThrough<T>(
   fetchPage: PageFetcher<T>,
   opts: CollectOptions<T>,
 ): Promise<PageThroughResult> {
-  await opts.onItems(first.items, w)
-
+  /**
+   * The **first** page-1 response's `total_count` governs, deliberately: it is
+   * also the number the caller already used to decide split-or-page, and a retry
+   * must not change that decision as a side effect. A retried page 1 therefore
+   * contributes items only, never a revised count.
+   *
+   * The asymmetry that settles it: a soft-throttled response is exactly the kind
+   * that would report a *lower* count, and adopting a lower count would shrink
+   * the bar this window has to clear — laundering a lossy read into
+   * `complete: true` and caching it as done forever. If the true count is in fact
+   * higher, the window simply reads short, reports incomplete, stays out of the
+   * cache, and the next run re-probes it with a fresh page 1 and re-decides
+   * bisection from that. Discrepancies surface through the existing self-healing
+   * path rather than being resolved mid-window.
+   */
   const expected = Math.min(first.totalCount, SEARCH_RESULT_CAP)
-  let collected = first.items.length
-  let lastPageSize = first.items.length
+  let collected = 0
+  let lastPageSize = 0
 
-  for (let page = 2; page <= MAX_PAGE; page++) {
-    if (collected >= expected && lastPageSize < PER_PAGE) break
+  for (let page = 1; page <= MAX_PAGE; page++) {
+    // Page 1 has already been fetched by the caller as the size probe, and its
+    // items must always be emitted, so the termination test starts at page 2.
+    if (page > 1 && collected >= expected && lastPageSize < PER_PAGE) break
 
-    let res = await fetchPage(w, page)
+    let res = page === 1 ? first : await fetchPage(w, page)
     // Only retry an empty page that contradicts the count. An empty page once
-    // we already hold everything promised is ordinary termination.
+    // we already hold everything promised is ordinary termination — and a
+    // genuinely empty window (expected 0) must still cost exactly one request.
     for (
       let attempt = 1;
       res.items.length === 0 && collected < expected && attempt <= EMPTY_PAGE_RETRIES;
