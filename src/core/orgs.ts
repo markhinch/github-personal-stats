@@ -1,10 +1,19 @@
 import type { Dataset } from './types'
 
+/**
+ * True when `repo` is a well-formed "owner/name" identifier, i.e. one that
+ * `orgOf` will accept. Exported so ingest can reject a malformed repo at the
+ * parser — the one place that can skip an item — rather than letting it reach
+ * `orgOf` and throw from somewhere with no way to recover.
+ */
+export function isRepoId(repo: string): boolean {
+  return repo.indexOf('/') > 0
+}
+
 /** Extracts the owner segment from an "owner/name" repo identifier. */
 export function orgOf(repo: string): string {
-  const slash = repo.indexOf('/')
-  if (slash <= 0) throw new Error(`Malformed repo identifier: ${JSON.stringify(repo)}`)
-  return repo.slice(0, slash)
+  if (!isRepoId(repo)) throw new Error(`Malformed repo identifier: ${JSON.stringify(repo)}`)
+  return repo.slice(0, repo.indexOf('/'))
 }
 
 /**

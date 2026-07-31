@@ -28,6 +28,27 @@ describe('cache', () => {
     expect(back.doneWindows.commits).toContain('2026-01-01..2026-12-31')
   })
 
+  it('round-trips unreachable days, so a permanent gap outlives the run that found it', async () => {
+    const path = await tmpFile('cache.json')
+    const c = emptyCache()
+    c.unreachableDays.commits.push('2026-05-14..2026-05-14')
+    await saveCache(path, c)
+    expect((await loadCache(path)).unreachableDays.commits).toEqual(['2026-05-14..2026-05-14'])
+  })
+
+  it('defaults unreachableDays for a cache written before the field existed', async () => {
+    const path = await tmpFile('old.json')
+    // A missing field is an older cache, not corruption, so it must not warn.
+    await writeFile(path, JSON.stringify({ commits: {}, prs: {}, watermark: {} }))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect((await loadCache(path)).unreachableDays).toEqual({ commits: [], prs: [] })
+      expect(warnSpy).not.toHaveBeenCalled()
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
   it('dedupes by key when the same commit is written twice', async () => {
     const path = await tmpFile('cache.json')
     const c = emptyCache()

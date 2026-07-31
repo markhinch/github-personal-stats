@@ -116,6 +116,26 @@ describe('parseCommitSearchResponse', () => {
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]?.[0]).toMatch(/full_name/)
   })
+
+  it.each(['weird', '/leading-slash', ''])(
+    'warns and skips an item whose repo is not "owner/name" (%j)',
+    (full_name) => {
+      // Every consumer derives the org by splitting on the slash, so letting one
+      // of these through would throw from the ingest hot path or the UI's org
+      // list. The parser is the only place that can skip an item.
+      const payload = {
+        total_count: 1,
+        items: [{
+          sha: 'abc',
+          commit: { author: { date: '2026-07-01T10:00:00.000+02:00' } },
+          repository: { full_name },
+        }],
+      }
+      expect(parseCommitSearchResponse(payload).items).toHaveLength(0)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toMatch(/full_name/)
+    },
+  )
 })
 
 const PR_PAYLOAD = {
@@ -197,6 +217,27 @@ describe('parsePrSearchResponse', () => {
       data: { search: { issueCount: 1, pageInfo: { hasNextPage: false }, nodes: [
         { id: 'x', mergedAt: '2026-06-30T12:00:00Z', additions: 1, deletions: 1, repository: {} },
       ] } },
+    }
+    expect(parsePrSearchResponse(payload).items).toHaveLength(0)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toMatch(/nameWithOwner/)
+  })
+
+  it('warns and skips a PR node whose repo is not "owner/name"', () => {
+    const payload = {
+      data: {
+        search: {
+          issueCount: 1,
+          pageInfo: { hasNextPage: false },
+          nodes: [{
+            id: 'x',
+            mergedAt: '2026-06-30T12:00:00Z',
+            additions: 1,
+            deletions: 1,
+            repository: { nameWithOwner: 'no-slash' },
+          }],
+        },
+      },
     }
     expect(parsePrSearchResponse(payload).items).toHaveLength(0)
     expect(warn).toHaveBeenCalledTimes(1)

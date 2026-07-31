@@ -10,10 +10,25 @@ export interface IngestCache {
   /** Fully-collected window keys, enabling resume after an interruption. */
   doneWindows: { commits: string[]; prs: string[] }
   watermark: { commits?: string; prs?: string }
+  /**
+   * Single days whose result count exceeded what the API will serve, so part of
+   * them is permanently unreachable.
+   *
+   * Persisted because re-running cannot recover them: without this the warning
+   * would vanish as soon as the watermark advanced past the day, and the
+   * dataset would render short with nothing left to explain why.
+   */
+  unreachableDays: { commits: string[]; prs: string[] }
 }
 
 export function emptyCache(): IngestCache {
-  return { commits: {}, prs: {}, doneWindows: { commits: [], prs: [] }, watermark: {} }
+  return {
+    commits: {},
+    prs: {},
+    doneWindows: { commits: [], prs: [] },
+    watermark: {},
+    unreachableDays: { commits: [], prs: [] },
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -73,6 +88,9 @@ export async function loadCache(path: string): Promise<IngestCache> {
   const doneWindowsCommits = validated(doneWindowsField.value.commits, Array.isArray, base.doneWindows.commits)
   const doneWindowsPrs = validated(doneWindowsField.value.prs, Array.isArray, base.doneWindows.prs)
   const watermark = validated(parsed.watermark, isPlainObject, base.watermark)
+  const unreachableField = validated(parsed.unreachableDays, isPlainObject, {} as Record<string, unknown>)
+  const unreachableCommits = validated(unreachableField.value.commits, Array.isArray, base.unreachableDays.commits)
+  const unreachablePrs = validated(unreachableField.value.prs, Array.isArray, base.unreachableDays.prs)
 
   const anyDiscarded =
     commits.discarded ||
@@ -80,7 +98,10 @@ export async function loadCache(path: string): Promise<IngestCache> {
     doneWindowsField.discarded ||
     doneWindowsCommits.discarded ||
     doneWindowsPrs.discarded ||
-    watermark.discarded
+    watermark.discarded ||
+    unreachableField.discarded ||
+    unreachableCommits.discarded ||
+    unreachablePrs.discarded
   if (anyDiscarded) warnCorrupt()
 
   return {
@@ -91,6 +112,10 @@ export async function loadCache(path: string): Promise<IngestCache> {
       prs: doneWindowsPrs.value as string[],
     },
     watermark: watermark.value as { commits?: string; prs?: string },
+    unreachableDays: {
+      commits: unreachableCommits.value as string[],
+      prs: unreachablePrs.value as string[],
+    },
   }
 }
 

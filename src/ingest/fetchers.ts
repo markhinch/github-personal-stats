@@ -1,4 +1,5 @@
 import { ghJson } from './gh'
+import { isRepoId } from '../core/orgs'
 import type { RateLimiter } from './ratelimit'
 import { PER_PAGE, windowKey, type DateWindow, type PageFetcher } from './windows'
 import type { CommitRecord, MergedPrRecord } from '../core/types'
@@ -26,11 +27,17 @@ export function parseCommitSearchResponse(json: unknown): {
     // Skip rather than abort: one odd item must not cost a whole window. But
     // never silently — a response shape change would otherwise quietly drop
     // items and render as "less work done" with nothing to explain why.
-    if (!sha || !authoredAt || !repo) {
+    //
+    // "owner/name" is required, not merely non-empty: every consumer derives the
+    // org by splitting on the slash, so a slash-less repo would throw from the
+    // ingest hot path (aborting a multi-minute backfill) or from the UI's org
+    // list. The parser is the one place that can skip an item, so it decides.
+    if (!sha || !authoredAt || !repo || !isRepoId(repo)) {
       const missing = [
         !sha && 'sha',
         !authoredAt && 'commit.author.date',
         !repo && 'repository.full_name',
+        repo && !isRepoId(repo) && `repository.full_name is not "owner/name" (${repo})`,
       ].filter((v): v is string => Boolean(v)).join(', ')
       console.warn(`Skipping malformed commit search item (sha=${sha ?? 'unknown'}): missing ${missing}`)
       continue
@@ -104,11 +111,12 @@ export function parsePrSearchResponse(json: unknown): {
     // isn't acceptable here either. Non-PR search nodes surface as empty
     // objects (the `... on PullRequest` fragment simply doesn't match), so
     // this also catches that expected case, not just malformed ones.
-    if (!n.id || !n.mergedAt || !repo) {
+    if (!n.id || !n.mergedAt || !repo || !isRepoId(repo)) {
       const missing = [
         !n.id && 'id',
         !n.mergedAt && 'mergedAt',
         !repo && 'repository.nameWithOwner',
+        repo && !isRepoId(repo) && `repository.nameWithOwner is not "owner/name" (${repo})`,
       ].filter((v): v is string => Boolean(v)).join(', ')
       console.warn(`Skipping malformed PR search item (id=${n.id ?? 'unknown'}): missing ${missing}`)
       continue

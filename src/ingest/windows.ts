@@ -192,6 +192,16 @@ async function pageThrough<T>(
  * read delivered what the count promised, not merely that no error was thrown.
  * Incompleteness propagates upward: a month containing one over-cap day, or one
  * day that read short, is itself incomplete.
+ *
+ * The limit of that guarantee, written down so it is not rediscovered: the
+ * comparison is on **row counts**, not distinct keys. This module is
+ * deliberately key-agnostic — it never inspects an item — so it cannot tell one
+ * result from another. GitHub's search pagination is not stable, so a reshuffle
+ * between two page requests could serve one row twice and another not at all,
+ * and `collected == expected` would still hold with a row genuinely missing.
+ * Detecting that needs a key the caller owns (the sync dedupes commits by SHA),
+ * so it belongs there, not here. Row counting catches the failure that actually
+ * bit us — a page truncating the window early — and that is what it is for.
  */
 export async function collectWindow<T>(
   window: DateWindow,
