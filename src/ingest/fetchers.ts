@@ -1,6 +1,6 @@
 import { ghJson } from './gh'
 import type { RateLimiter } from './ratelimit'
-import { PER_PAGE, type DateWindow, type PageFetcher } from './windows'
+import { PER_PAGE, windowKey, type DateWindow, type PageFetcher } from './windows'
 import type { CommitRecord, MergedPrRecord } from '../core/types'
 
 // ---------- commits (REST search) ----------
@@ -135,7 +135,7 @@ export function parsePrSearchResponse(json: unknown): {
 
 const PR_QUERY = `
 query($q: String!, $cursor: String) {
-  search(query: $q, type: ISSUE, first: 100, after: $cursor) {
+  search(query: $q, type: ISSUE, first: ${PER_PAGE}, after: $cursor) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes {
@@ -161,7 +161,7 @@ export function makePrFetcher(login: string, rl: RateLimiter): PageFetcher<Parse
   const cursors = new Map<string, string[]>()
 
   return async (w: DateWindow, page: number) => {
-    const key = `${w.start}..${w.end}`
+    const key = windowKey(w)
     const known = cursors.get(key) ?? []
     const args = [
       'api', 'graphql',

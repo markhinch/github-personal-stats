@@ -181,6 +181,28 @@ describe('parsePrSearchResponse', () => {
     expect(warn.mock.calls[0]?.[0]).toMatch(/mergedAt/)
   })
 
+  it('warns and skips a PR node missing only id', () => {
+    const payload = {
+      data: { search: { issueCount: 1, pageInfo: { hasNextPage: false }, nodes: [
+        { mergedAt: '2026-06-30T12:00:00Z', additions: 1, deletions: 1, repository: { nameWithOwner: 'a/b' } },
+      ] } },
+    }
+    expect(parsePrSearchResponse(payload).items).toHaveLength(0)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toMatch(/\bid\b/)
+  })
+
+  it('warns and skips a PR node missing only repository.nameWithOwner', () => {
+    const payload = {
+      data: { search: { issueCount: 1, pageInfo: { hasNextPage: false }, nodes: [
+        { id: 'x', mergedAt: '2026-06-30T12:00:00Z', additions: 1, deletions: 1, repository: {} },
+      ] } },
+    }
+    expect(parsePrSearchResponse(payload).items).toHaveLength(0)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toMatch(/nameWithOwner/)
+  })
+
   it('throws when hasNextPage is true but endCursor is absent', () => {
     const payload = {
       data: { search: { issueCount: 5, pageInfo: { hasNextPage: true }, nodes: [] } },
@@ -285,6 +307,32 @@ describe('makePrFetcher', () => {
     const second = await fetch(w, 2)
     expect(second.items).toHaveLength(1)
     expect(calls[1]?.some((a) => a === 'cursor=CURSOR_ONE' || a.includes('cursor=CURSOR_ONE'))).toBe(true)
+  })
+
+  it('sends the GraphQL page size matching PER_PAGE', async () => {
+    const calls = stubExec([{
+      data: { search: { issueCount: 0, pageInfo: { hasNextPage: false }, nodes: [] } },
+    }])
+    const rl = new RateLimiter(28, { now: () => 0, sleep: async () => {} })
+    const fetch = makePrFetcher('markhinch', rl)
+
+    await fetch({ start: '2026-06-01', end: '2026-06-30' }, 1)
+
+    const queryArg = calls[0]?.find((a) => a.startsWith('query='))
+    expect(queryArg).toBeDefined()
+    expect(queryArg).toContain(`first: ${PER_PAGE}`)
+    expect(PER_PAGE).toBe(100)
+  })
+
+  // A behavioral assertion alone can't distinguish "derived from PER_PAGE"
+  // from "hardcoded to PER_PAGE's current value of 100" — both produce an
+  // identical query string today. This source-level check is the actual
+  // regression guard: it fails the instant `first: ${PER_PAGE}` is replaced
+  // with a numeric literal, which the behavioral test above would not catch.
+  it('builds the GraphQL page size from the PER_PAGE constant, not a hardcoded number', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const source = await readFile(new URL('./fetchers.ts', import.meta.url), 'utf8')
+    expect(source).toMatch(/first:\s*\$\{PER_PAGE\}/)
   })
 })
 
