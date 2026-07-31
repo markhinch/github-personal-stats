@@ -1,13 +1,35 @@
 import { useEffect, useState } from 'react'
 import type { Dataset } from '../core/types'
 
-const MISSING =
-  'No dataset found. Run `pnpm sync` to fetch your GitHub activity, then reload.'
+/**
+ * Every way loading `/data.json` can fail. `public/data.json` has no producer
+ * other than `pnpm sync` — it is never hand-written, never fetched from
+ * anywhere else — so every one of these kinds resolves to the same remedy.
+ * Kept as a closed set (rather than passing the raw Error/Response through)
+ * so the failure message can never leak internals like a JSON parser's
+ * "Unexpected token '<'" (the actual bug this shape replaced: a dev server's
+ * SPA fallback returns index.html with a 200, so `r.ok` is true and only
+ * `r.json()` fails).
+ */
+export type DatasetLoadFailure =
+  | { kind: 'network' }
+  | { kind: 'http'; status: number }
+  | { kind: 'parse' }
+  | { kind: 'schema' }
+
+/**
+ * Maps a load failure to the one user-facing message. Pure and exported so
+ * every failure shape is regression-tested directly, without a fetch/DOM
+ * harness — see useDataset.test.ts.
+ */
+export function datasetErrorMessage(_failure: DatasetLoadFailure): string {
+  return "Couldn't load your GitHub activity. Run `pnpm sync` to (re)generate it, then reload."
+}
 
 export function parseDataset(json: unknown): Dataset {
   const o = json as Partial<Dataset> | null
   if (!o || !Array.isArray(o.commits) || !Array.isArray(o.mergedPrs)) {
-    throw new Error(MISSING)
+    throw new Error(datasetErrorMessage({ kind: 'schema' }))
   }
   return {
     commits: o.commits,
@@ -26,18 +48,42 @@ export function useDataset(): DatasetState {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/data.json')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(MISSING))))
-      .then((json) => {
-        if (!cancelled) setState({ status: 'ready', dataset: parseDataset(json) })
-      })
-      .catch(() => {
-        // Every failure here — network error, non-200, a dev-server SPA
-        // fallback serving index.html with a 200 that then fails to parse
-        // as JSON, or a malformed dataset shape — has the same one remedy.
-        // Surfacing the raw error (a JSON SyntaxError, say) would be noise.
-        if (!cancelled) setState({ status: 'error', message: MISSING })
-      })
+
+    const fail = (failure: DatasetLoadFailure): void => {
+      if (!cancelled) setState({ status: 'error', message: datasetErrorMessage(failure) })
+    }
+
+    async function load(): Promise<void> {
+      let response: Response
+      try {
+        response = await fetch('/data.json')
+      } catch {
+        fail({ kind: 'network' })
+        return
+      }
+
+      if (!response.ok) {
+        fail({ kind: 'http', status: response.status })
+        return
+      }
+
+      let json: unknown
+      try {
+        json = await response.json()
+      } catch {
+        fail({ kind: 'parse' })
+        return
+      }
+
+      try {
+        const dataset = parseDataset(json)
+        if (!cancelled) setState({ status: 'ready', dataset })
+      } catch {
+        fail({ kind: 'schema' })
+      }
+    }
+
+    void load()
     return () => {
       cancelled = true
     }

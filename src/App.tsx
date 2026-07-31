@@ -75,16 +75,8 @@ export default function App() {
           </div>
 
           <div className="mt-8">
-            <ActivityChart series={series} metric={metric} />
+            <ActivityChart series={series} metric={metric} hasOrgs={orgs.length > 0} />
           </div>
-
-          {metric === 'lines' && (
-            <p className="mt-4 text-xs text-neutral-500">
-              Lines changed is additions + deletions from merged pull requests, credited to
-              the merge date — so a PR merged this month may contain earlier work. Commit
-              counts are exact; this metric is an approximation.
-            </p>
-          )}
         </>
       )}
     </main>

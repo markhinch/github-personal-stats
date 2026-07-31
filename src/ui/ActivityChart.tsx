@@ -28,13 +28,29 @@ function usePrefersDark(): boolean {
   return dark
 }
 
-export function ActivityChart({ series, metric }: { series: SeriesPoint[]; metric: Metric }) {
+interface Props {
+  series: SeriesPoint[]
+  metric: Metric
+  /**
+   * Whether the dataset has any orgs at all. Distinguishes "you deselected
+   * everything" (actionable: select one) from "there is nothing to select"
+   * (a well-formed but empty dataset — no commits or merged PRs yet) so the
+   * empty state never tells the user to do something the checkbox list
+   * doesn't let them do.
+   */
+  hasOrgs: boolean
+}
+
+export function ActivityChart({ series, metric, hasOrgs }: Props) {
   const colors = usePrefersDark() ? PALETTE.dark : PALETTE.light
 
   if (series.length === 0) {
+    const message = hasOrgs
+      ? 'Nothing to show — select at least one organisation.'
+      : 'Nothing to show — this dataset has no commits or merged pull requests yet. Run `pnpm sync` to refresh it.'
     return (
-      <div className="flex h-80 items-center justify-center rounded-xl border border-dashed border-neutral-300 text-sm text-neutral-500 dark:border-neutral-700">
-        Nothing to show — select at least one organisation.
+      <div className="flex h-80 items-center justify-center rounded-xl border border-dashed border-neutral-300 text-center text-sm text-neutral-500 dark:border-neutral-700">
+        {message}
       </div>
     )
   }
