@@ -61,12 +61,23 @@ export type PageFetcher<T> = (
   page: number,
 ) => Promise<{ totalCount: number; items: T[] }>
 
+/**
+ * How many times to re-request a page that came back empty while the reported
+ * count still promises more results.
+ *
+ * Bounded on purpose: a page that is legitimately and permanently empty must
+ * end the window rather than hang the backfill.
+ */
+export const EMPTY_PAGE_RETRIES = 2
+
 /** The outcome of reading a window: was everything in it actually reachable? */
 export interface WindowResult {
   /**
-   * False when the window — or any window nested inside it — reported more
-   * results than the API will serve. An incomplete window has provably lost
-   * items, so a resume cache must not record it as finished.
+   * False when the window — or any window nested inside it — did not yield
+   * everything the API said it held. Two causes: the window reported more
+   * results than the API will serve (the cap), or paging ended short of the
+   * reported count (a throttled or flaky read). Either way the window has
+   * provably lost items, so a resume cache must not record it as finished.
    */
   complete: boolean
 }
@@ -88,8 +99,29 @@ export interface CollectOptions<T> {
   isDone?: (w: DateWindow) => boolean
   /** Called when a single day exceeds the cap and cannot be split further. */
   onUnsplittable?: (w: DateWindow, totalCount: number) => void
+  /**
+   * Called before re-requesting a page that came back empty while the reported
+   * count still promised more results.
+   *
+   * The backoff lives here rather than in this module so bisection stays
+   * independent of the rate limiter: the caller owns the delay (typically
+   * `RateLimiter.pauseFor`), and tests inject nothing and so never sleep.
+   */
+  onEmptyPageRetry?: (w: DateWindow, page: number, attempt: number) => Promise<void> | void
+  /**
+   * Called when a window ended short of its reported count even after retries.
+   * The window is reported incomplete, so it will be re-read on the next run;
+   * this exists so the shortfall is never merely inferred from a total.
+   */
+  onShortRead?: (w: DateWindow, collected: number, expected: number) => void
   /** Progress reporting. */
   onProgress?: (w: DateWindow, totalCount: number) => void
+}
+
+/** What a paging pass actually read, versus what the count promised. */
+interface PageThroughResult {
+  collected: number
+  expected: number
 }
 
 /**
@@ -102,13 +134,21 @@ export interface CollectOptions<T> {
  * read before the window grew, or a fetcher paging at fewer than `PER_PAGE`.
  * Only a short page proves the window is exhausted. Trusting the count alone
  * under-collects silently, which is the whole failure mode of this module.
+ *
+ * An empty page is not treated as proof of exhaustion while the count still
+ * promises more: GitHub serves 200-with-empty-`items` under soft throttling,
+ * and believing it once cost a real backfill 558 commits that the API would
+ * serve on request. Such a page is retried, and if it stays empty the shortfall
+ * is returned rather than hidden — the caller turns that into
+ * `complete: false`, which keeps the window out of the resume cache so the next
+ * run re-reads it.
  */
 async function pageThrough<T>(
   w: DateWindow,
   first: { totalCount: number; items: T[] },
   fetchPage: PageFetcher<T>,
   opts: CollectOptions<T>,
-): Promise<void> {
+): Promise<PageThroughResult> {
   await opts.onItems(first.items, w)
 
   const expected = Math.min(first.totalCount, SEARCH_RESULT_CAP)
@@ -117,13 +157,28 @@ async function pageThrough<T>(
 
   for (let page = 2; page <= MAX_PAGE; page++) {
     if (collected >= expected && lastPageSize < PER_PAGE) break
-    const res = await fetchPage(w, page)
+
+    let res = await fetchPage(w, page)
+    // Only retry an empty page that contradicts the count. An empty page once
+    // we already hold everything promised is ordinary termination.
+    for (
+      let attempt = 1;
+      res.items.length === 0 && collected < expected && attempt <= EMPTY_PAGE_RETRIES;
+      attempt++
+    ) {
+      await opts.onEmptyPageRetry?.(w, page, attempt)
+      res = await fetchPage(w, page)
+    }
+
     await opts.onItems(res.items, w)
     collected += res.items.length
     lastPageSize = res.items.length
-    // An empty page ends the window regardless of what the count claimed.
+    // A page that is still empty after its retries ends the window. The
+    // shortfall travels back to the caller instead of passing for success.
     if (res.items.length === 0) break
   }
+
+  return { collected, expected }
 }
 
 /**
@@ -133,8 +188,10 @@ async function pageThrough<T>(
  * The size probe is free: page 1's response carries both `total_count` and the
  * first 100 results, so an under-cap window costs no extra request.
  *
- * Returns whether the window was fully reachable. Incompleteness propagates
- * upward: a month containing one over-cap day is itself incomplete.
+ * Returns whether the window was fully reachable — meaning the pages actually
+ * read delivered what the count promised, not merely that no error was thrown.
+ * Incompleteness propagates upward: a month containing one over-cap day, or one
+ * day that read short, is itself incomplete.
  */
 export async function collectWindow<T>(
   window: DateWindow,
@@ -177,8 +234,13 @@ export async function collectWindow<T>(
     return result
   }
 
-  await pageThrough(window, first, fetchPage, opts)
-  const result: WindowResult = { complete: true }
+  // Under the cap, so everything the count promises should be reachable. Assert
+  // that it actually arrived: claiming `complete: true` here without checking
+  // is what let a throttled read be cached as finished and lost for good.
+  const { collected, expected } = await pageThrough(window, first, fetchPage, opts)
+  const complete = collected >= expected
+  if (!complete) opts.onShortRead?.(window, collected, expected)
+  const result: WindowResult = { complete }
   await opts.onDone?.(window, result)
   return result
 }

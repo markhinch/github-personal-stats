@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { assertGhReady, GhError } from './gh'
 import { RateLimiter } from './ratelimit'
 import {
-  collectWindow, windowKey, yearWindows, SEARCH_RESULT_CAP,
+  collectWindow, windowKey, yearWindows, EMPTY_PAGE_RETRIES, SEARCH_RESULT_CAP,
   type DateWindow, type WindowResult,
 } from './windows'
 import { emptyCache, loadCache, saveCache } from './cache'
@@ -18,6 +18,12 @@ const CACHE_PATH = resolve('.cache/ingest.json')
 const OUT_PATH = resolve('public/data.json')
 /** Re-query recent history to catch amended and late-arriving commits. */
 const OVERLAP_DAYS = 3
+/**
+ * Backoff before re-requesting a page that came back empty. GitHub serves empty
+ * pages when it is soft-throttling, and its secondary limits clear on the order
+ * of a minute, so the waits are long rather than eager.
+ */
+const retryBackoffMs = (attempt: number): number => Math.min(60_000, 15_000 * 2 ** (attempt - 1))
 
 const today = (): string => new Date().toISOString().slice(0, 10)
 
@@ -89,6 +95,30 @@ async function main(): Promise<void> {
   // enclosing window incomplete, which would be far noisier to list).
   const unreachableCommitDays: string[] = []
   const unreachablePrDays: string[] = []
+  const shortReads: string[] = []
+
+  /**
+   * Hands the retry wait to the rate limiter, whose next `acquire()` honours the
+   * pause. Injecting it this way is what keeps `windows.ts` free of any
+   * dependency on the limiter.
+   */
+  const onEmptyPageRetry = (w: DateWindow, page: number, attempt: number): void => {
+    const wait = retryBackoffMs(attempt)
+    rl.pauseFor(wait)
+    console.error(
+      `  .. ${windowKey(w)} page ${page} came back empty with results still outstanding; ` +
+      `retrying in ${Math.round(wait / 1000)}s (attempt ${attempt}/${EMPTY_PAGE_RETRIES}).`,
+    )
+  }
+
+  const onShortRead = (noun: string, into: string[]) =>
+    (w: DateWindow, collected: number, expected: number): void => {
+      into.push(`${windowKey(w)} (${collected}/${expected} ${noun})`)
+      console.error(
+        `\n!! ${windowKey(w)} served only ${collected} of ${expected} ${noun} even after ` +
+        `retries. NOT cached as done — the next sync will re-read this window.\n`,
+      )
+    }
 
   // ---- commits ----
   const commitFetcher = makeCommitFetcher(LOGIN, rl)
@@ -101,6 +131,8 @@ async function main(): Promise<void> {
         commitCount += items.length
       },
       onDone: (w, result) => finishWindow(cache.doneWindows.commits, w, result),
+      onEmptyPageRetry,
+      onShortRead: onShortRead('commits', shortReads),
       onProgress: (w, total) => {
         process.stdout.write(`  commits ${windowKey(w)}: ${total}\n`)
       },
@@ -125,6 +157,8 @@ async function main(): Promise<void> {
         for (const p of items) cache.prs[p.id] = p.record
       },
       onDone: (w, result) => finishWindow(cache.doneWindows.prs, w, result),
+      onEmptyPageRetry,
+      onShortRead: onShortRead('merged PRs', shortReads),
       onProgress: (w, total) => {
         process.stdout.write(`  PRs ${windowKey(w)}: ${total}\n`)
       },
@@ -152,14 +186,24 @@ async function main(): Promise<void> {
     `\nDone. ${dataset.commits.length} commits, ${dataset.mergedPrs.length} merged PRs ` +
     `(${commitCount} commit rows fetched this run, ${flushed} cache flushes).`,
   )
+  // Restated at the end because the per-window warnings above are easy to lose
+  // in several hundred lines of progress output.
   if (unreachableCommitDays.length > 0 || unreachablePrDays.length > 0) {
-    // Restated at the end because the per-day warnings above are easy to lose
-    // in several hundred lines of progress output. These days are never cached
-    // as done, so they keep warning on every future run that covers them.
+    // Never cached as done, so these keep warning on every run that covers them.
     console.error(
-      `\n!! DATA IS INCOMPLETE — days over the ${SEARCH_RESULT_CAP}-result cap:\n` +
+      `\n!! DATA IS INCOMPLETE — days over the ${SEARCH_RESULT_CAP}-result cap ` +
+      `(permanently unreachable):\n` +
       `   commits: ${unreachableCommitDays.join(', ') || '(none)'}\n` +
       `   PRs:     ${unreachablePrDays.join(', ') || '(none)'}\n`,
+    )
+  }
+  if (shortReads.length > 0) {
+    // Unlike the cap, this is usually transient throttling — and because the
+    // window is not cached as done, the next run re-reads it and self-heals.
+    console.error(
+      `\n!! ${shortReads.length} window(s) read short of their reported count and were NOT ` +
+      `cached as done. Re-run \`pnpm sync\` to re-read them:\n` +
+      shortReads.map((s) => `   ${s}`).join('\n') + '\n',
     )
   }
   console.log(`Wrote ${OUT_PATH}`)

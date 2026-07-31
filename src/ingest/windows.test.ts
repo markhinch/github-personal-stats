@@ -4,6 +4,7 @@ import {
   windowKey,
   yearWindows,
   collectWindow,
+  EMPTY_PAGE_RETRIES,
   MAX_PAGE,
   type DateWindow,
   type PageFetcher,
@@ -242,6 +243,124 @@ describe('collectWindow', () => {
       isDone: (w) => windowKey(w) === '2026-01-01..2026-01-31',
     })
     expect(calls).toHaveLength(0)
+  })
+
+  /**
+   * Regression cover for a real 558-commit loss. GitHub answered a mid-window
+   * page with 200-and-empty-`items` while soft-throttling; the window was taken
+   * as exhausted, reported complete, and cached as done, so the commits the API
+   * would happily serve were gone for good.
+   *
+   * No test here sleeps: the backoff is injected via `onEmptyPageRetry`, so the
+   * suite exercises the retry path in milliseconds.
+   */
+  describe('an empty page that contradicts the reported count', () => {
+    /** 250 results, but page 2 is empty the first `emptyTimes` times it is asked. */
+    const flakyFetcher = (emptyTimes: number) => {
+      const all = Array.from({ length: 250 }, (_, i) => `c${i}`)
+      const calls: number[] = []
+      let seen = 0
+      const fetchPage: PageFetcher<string> = async (_w, page) => {
+        calls.push(page)
+        if (page === 2 && seen < emptyTimes) {
+          seen++
+          return { totalCount: 250, items: [] }
+        }
+        const from = (page - 1) * 100
+        return { totalCount: 250, items: all.slice(from, from + 100) }
+      }
+      return { fetchPage, calls }
+    }
+
+    it('is retried, and the items are recovered', async () => {
+      const { fetchPage, calls } = flakyFetcher(1)
+      const retries: Array<{ page: number; attempt: number }> = []
+      const got: string[] = []
+      const result = await collectWindow({ start: '2026-01-01', end: '2026-01-31' }, fetchPage, {
+        onItems: async (items) => { got.push(...items) },
+        onEmptyPageRetry: (_w, page, attempt) => { retries.push({ page, attempt }) },
+      })
+      // Nothing lost, and the window is honestly complete.
+      expect(new Set(got).size).toBe(250)
+      expect(result.complete).toBe(true)
+      expect(retries).toEqual([{ page: 2, attempt: 1 }])
+      expect(calls).toEqual([1, 2, 2, 3])
+    })
+
+    it('reports the window incomplete — without hanging — when it stays empty', async () => {
+      const calls: number[] = []
+      const fetchPage: PageFetcher<string> = async (_w, page) => {
+        calls.push(page)
+        if (page === 1) {
+          return { totalCount: 500, items: Array.from({ length: 100 }, (_, i) => `a${i}`) }
+        }
+        return { totalCount: 500, items: [] } // never recovers
+      }
+      const shortReads: Array<[number, number]> = []
+      const done = new Map<string, boolean>()
+      const result = await collectWindow({ start: '2026-01-01', end: '2026-01-31' }, fetchPage, {
+        onItems: async () => {},
+        onShortRead: (_w, collected, expected) => { shortReads.push([collected, expected]) },
+        onDone: async (w, r) => { done.set(windowKey(w), r.complete) },
+      })
+      expect(result.complete).toBe(false)
+      expect(shortReads).toEqual([[100, 500]])
+      expect(done.get('2026-01-01..2026-01-31')).toBe(false)
+      // Bounded: the first attempt plus its retries, then it gives up.
+      expect(calls.filter((p) => p === 2)).toHaveLength(EMPTY_PAGE_RETRIES + 1)
+      expect(calls).toEqual([1, 2, 2, 2])
+    })
+
+    it('is NOT retried once everything the count promised is already collected', async () => {
+      // A full last page followed by an empty one is ordinary termination, not
+      // throttling, and must not pay for retries or a backoff.
+      const calls: number[] = []
+      const pages: Record<number, string[]> = {
+        1: Array.from({ length: 100 }, (_, i) => `a${i}`),
+        2: Array.from({ length: 100 }, (_, i) => `b${i}`),
+      }
+      const fetchPage: PageFetcher<string> = async (_w, page) => {
+        calls.push(page)
+        return { totalCount: 200, items: pages[page] ?? [] }
+      }
+      const retries: number[] = []
+      const result = await collectWindow({ start: '2026-01-01', end: '2026-01-31' }, fetchPage, {
+        onItems: async () => {},
+        onEmptyPageRetry: (_w, _page, attempt) => { retries.push(attempt) },
+      })
+      expect(result.complete).toBe(true)
+      expect(retries).toEqual([])
+      expect(calls).toEqual([1, 2, 3])
+    })
+
+    it('is not cached as done, so the next run re-reads it and self-heals', async () => {
+      // The end-to-end shape of the original bug: throttled run loses items,
+      // healthy run recovers them, because the loss was never marked finished.
+      const cache = new Set<string>()
+      const w: DateWindow = { start: '2026-01-01', end: '2026-01-31' }
+      const run = async (emptyTimes: number) => {
+        const { fetchPage } = flakyFetcher(emptyTimes)
+        const got: string[] = []
+        const result = await collectWindow(w, fetchPage, {
+          onItems: async (items) => { got.push(...items) },
+          isDone: (x) => cache.has(windowKey(x)),
+          onDone: async (x, r) => { if (r.complete) cache.add(windowKey(x)) },
+        })
+        return { got, result }
+      }
+
+      // Throttled: page 2 empty through every retry.
+      const first = await run(EMPTY_PAGE_RETRIES + 1)
+      expect(first.result.complete).toBe(false)
+      expect(new Set(first.got).size).toBe(100)
+      expect(cache.has(windowKey(w))).toBe(false) // the loss is not locked in
+
+      // Healthy: the window is re-read rather than skipped, and recovers fully.
+      const second = await run(0)
+      expect(second.result.complete).toBe(true)
+      expect(new Set(second.got).size).toBe(250)
+      expect(cache.has(windowKey(w))).toBe(true)
+    })
   })
 
   it('marks a window complete only after it is fully collected', async () => {
