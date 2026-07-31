@@ -46,13 +46,27 @@ Measured against the live API on 2026-07-31, authenticated as `markhinch`:
 | GraphQL rate limit | 5,000 points/hr — effectively free at this scale |
 | Orgs | `Huub-NL`, `smartfaster-ui`, `modem-works`, `mantrasupplies`, `future-self-labs`, plus own repos |
 
-Commit volume by year: 2022: 7 · 2023: 55 · 2024: 179 · 2025: 3,665 · 2026 (to 31 Jul):
-5,243. Total ≈ **9,150**.
+**Search `total_count` per year (row counts, for cap planning):** 2022: 7 · 2023: 55 ·
+2024: 179 · 2025: 3,665 · 2026 (to 31 Jul): 5,243 — about 9,150 rows in total.
 
-2026 by month: Jan 362 · Feb 425 · Mar 552 · Apr 405 · May 1,325 · Jun 743 · Jul 1,431.
+These are **rows, not commits.** `search/commits` returns one row per
+*(commit × repository)*, so a commit that exists in a fork network is counted once per
+copy. Rows are the right unit for cap planning — the 1,000-result cap applies to rows —
+and the wrong unit for "how much did I commit". Conflating the two caused a false alarm
+in this project; the ingester deduplicates by SHA precisely because they differ.
 
-**Critical:** May (1,325) and July (1,431) exceed the 1,000-result cap. Naive monthly
-chunking would silently discard ~750 commits with no error. Adaptive window bisection
+**Distinct commits per year, from the shipped `public/data.json`:** 2020: 1 · 2022: 7 ·
+2023: 55 · 2024: 179 · 2025: 3,107 · 2026 (to 31 Jul): 5,246. Total **8,595**.
+
+The history begins in **August 2020** (a single commit on 2020-08-18), not 2022. 2025 is
+where rows and commits diverge most — 3,665 rows against 3,107 distinct commits — which
+is fork-network duplication, not loss.
+
+2026 by month (rows): Jan 362 · Feb 425 · Mar 552 · Apr 405 · May 1,325 · Jun 743 ·
+Jul 1,431 (1,434 by the time the dataset was synced later the same day).
+
+**Critical:** May (1,325) and July (1,431+) exceed the 1,000-result cap. Naive monthly
+chunking would silently discard ~750 rows with no error. Adaptive window bisection
 is a correctness requirement, not an optimisation.
 
 ## Architecture
@@ -63,7 +77,7 @@ Static SPA plus an offline ingester. Two commands:
 - `pnpm dev` — serve the SPA, which loads that one file
 
 Nothing at runtime talks to GitHub or to a database. All filtering and bucketing happens
-client-side in memory; the dataset is ~150 KB gzipped, so this is instant.
+client-side in memory; the dataset is ~284 KB gzipped (1.09 MB raw), so this is instant.
 
 **Stack:** TypeScript · Vite · React 19 · Tailwind v4 · Recharts 3 · Vitest.
 
@@ -90,9 +104,15 @@ Adaptive bisection:
 4. Bisection floors at one day. A single day over 1,000 commits is logged loudly as
    unhandled rather than silently truncated.
 
-Rate limiting: token bucket at 28/min (headroom under the 30/min limit), honouring
-`x-ratelimit-remaining` and `retry-after`, with exponential backoff on secondary
-rate-limit 403s. Cold backfill ≈ 104 requests ≈ under 4 minutes.
+Rate limiting: a proactive sliding-window limiter at 28 requests/min, with headroom under
+the documented 30/min search limit. That is the whole of it — the limiter's job is to stay
+under the limit, not to react to being over it. No response *header* is inspected anywhere:
+`gh api` is invoked for its stdout, so `x-ratelimit-remaining` and `retry-after` are not
+even visible to this code. The one backoff that exists is triggered by *data*, not headers
+— an empty page that contradicts `total_count` — and it is fed to the limiter via
+`pauseFor`. GitHub's undocumented **secondary** rate limit is therefore not handled: a 403
+surfaces as a `GhError` and aborts the run. That is deliberate (see Error handling).
+Cold backfill ≈ 104 requests ≈ 4-5 minutes.
 
 *Pull requests* — GraphQL `search(type: ISSUE, query: "type:pr author:markhinch …")`,
 reading `additions`, `deletions`, `mergedAt`, and `repository.nameWithOwner`. GraphQL
@@ -149,7 +169,8 @@ artifact.
 ## Data honesty
 
 **Commit counts are exact. Lines of code are approximate.** Per-commit diffs would cost
-~9,150 additional API calls, so lines come from pull request `additions`/`deletions` and
+~8,600 additional API calls (one per distinct commit), so lines come from pull request
+`additions`/`deletions` and
 are credited to the PR's **merge date**. A PR merged in July containing June commits
 attributes all of its lines to July. Only merged PRs count toward lines — unmerged work
 is not shipped work.
@@ -161,7 +182,9 @@ This limitation is surfaced in the UI next to the lines metric, not buried here.
 | Condition | Behaviour |
 | --- | --- |
 | `gh` missing or unauthenticated | Fail fast, name the fix (`gh auth login`) |
-| Rate limit hit | Back off, report progress, continue |
+| Documented 30/min search limit | Never reached — the 28/min limiter paces requests proactively |
+| Undocumented **secondary** rate limit (403) | **Not handled.** Rejects as `GhError` and aborts the run with exit 1. Nothing is lost: every completed window is already flushed to the cache, and the message says to re-run `pnpm sync` to resume |
+| Empty page contradicting `total_count` (soft throttling) | Re-request the page, up to 2 retries, waiting 15s then 30s via the rate limiter. If it stays empty the window is reported incomplete, withheld from the resume cache, and the watermark is rewound so the next run re-reads it |
 | Backfill interrupted | Resume from cache on next `pnpm sync` |
 | A single day exceeds 1,000 commits | Log loudly as unhandled — never truncate silently |
 | `public/data.json` missing | UI states that `pnpm sync` needs to run |
@@ -180,7 +203,10 @@ would be both likely and invisible.
   truncate.** This is the highest-value test in the suite — the bug it guards against
   would silently cost ~750 commits and produce a chart that looks perfectly plausible.
 - Dedup: overlapping windows yielding the same SHA produce one record
-- Rate limiter: stays under 30/min; honours `retry-after`
+- Rate limiter: stays under 30/min; a requested pause delays the next `acquire()`
+- Resume seam: an incomplete window is never cached as done, and a cached window reaching
+  into the re-scanned overlap is never skipped — the two decisions that, if wrong, make
+  every later sync under-report in silence
 
 ## Implementation notes
 

@@ -26,7 +26,14 @@ export class RateLimiter {
     this.sleep = deps.sleep ?? realSleep
   }
 
-  /** Requests a backoff pause, e.g. in response to a Retry-After header. */
+  /**
+   * Requests a backoff pause, delaying the next `acquire()`.
+   *
+   * Nothing here reads response headers — `gh api` is invoked for its stdout, so
+   * `Retry-After` is not visible to this code. The sync calls this when a page
+   * comes back empty while `total_count` still promises more results, which is
+   * how GitHub's soft throttling shows up in the data.
+   */
   pauseFor(ms: number): void {
     this.pausedUntil = Math.max(this.pausedUntil, this.now() + ms)
   }
