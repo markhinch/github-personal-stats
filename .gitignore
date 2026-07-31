@@ -4,6 +4,9 @@ dist/
 # Brainstorming mockups (visual companion session files)
 .superpowers/
 
+# Local tooling scaffolding (dev-server launch config)
+.claude/
+
 # Ingest cache + generated dataset — rebuild with `pnpm sync`
 .cache/
 public/data.json
