@@ -4,9 +4,11 @@ import { assertGhReady, GhError } from './gh'
 import { RateLimiter } from './ratelimit'
 import {
   collectWindow, windowKey, yearWindows, EMPTY_PAGE_RETRIES, SEARCH_RESULT_CAP,
-  type DateWindow, type WindowResult,
+  type DateWindow,
 } from './windows'
 import { emptyCache, loadCache, saveCache } from './cache'
+import { finishWindow, makeIsDone } from './resume'
+import { isEntryPoint } from './entrypoint'
 import {
   fetchViewerCreatedAt, fetchViewerOrgs, makeCommitFetcher, makePrFetcher, type ParsedPr,
 } from './fetchers'
@@ -29,7 +31,7 @@ const retryBackoffMs = (attempt: number): number => Math.min(60_000, 15_000 * 2 
 
 const today = (): string => new Date().toISOString().slice(0, 10)
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const full = process.argv.includes('--full')
 
   await assertGhReady()
@@ -56,35 +58,15 @@ async function main(): Promise<void> {
   console.log(`Search limited to ${SEARCH_PER_MINUTE}/min; a cold backfill takes ~4-5 minutes.\n`)
 
   const rl = new RateLimiter(SEARCH_PER_MINUTE)
-  // Windows re-scanned by the overlap must not be skipped as "done".
+  // Start of the overlap period the incremental run deliberately re-reads. It is
+  // consumed by `makeIsDone`, which — together with `finishWindow`'s `complete`
+  // gate — lives in ./resume, where both decisions are tested.
   const staleFrom = shiftDays(rangeEnd, -OVERLAP_DAYS)
-  const isDone = (list: string[]) => (w: DateWindow): boolean =>
-    w.end < staleFrom && list.includes(windowKey(w))
 
   let flushed = 0
   const flush = async (): Promise<void> => {
     await saveCache(CACHE_PATH, cache)
     flushed++
-  }
-
-  /**
-   * Records a finished window, then persists.
-   *
-   * The `complete` gate is the whole point: an incomplete window has provably
-   * lost items, so marking it done would make `isDone` skip it *before the
-   * probe* on the next run — `onUnsplittable` would never fire again and every
-   * later sync would under-report in total silence. The records that were
-   * reachable are still worth keeping, so the flush happens either way; only
-   * the "skip me next time" marker is withheld.
-   */
-  const finishWindow = async (
-    list: string[],
-    w: DateWindow,
-    result: WindowResult,
-  ): Promise<void> => {
-    const key = windowKey(w)
-    if (result.complete && !list.includes(key)) list.push(key)
-    await flush()
   }
 
   // Days the API refuses to serve in full. Collected from `onUnsplittable`,
@@ -138,7 +120,7 @@ async function main(): Promise<void> {
   let commitCount = 0
   for (const seed of yearWindows(commitStart, rangeEnd)) {
     await collectWindow<CommitRecord>(seed, commitFetcher, {
-      isDone: isDone(cache.doneWindows.commits),
+      isDone: makeIsDone(cache.doneWindows.commits, staleFrom),
       onItems: async (items) => {
         // Dedupe by SHA. Search returns one row per (commit x repository), so a
         // commit in a fork network arrives once per copy; preferRepo picks which
@@ -146,7 +128,7 @@ async function main(): Promise<void> {
         for (const c of items) cache.commits[c.sha] = preferRepo(cache.commits[c.sha], c, identity)
         commitCount += items.length
       },
-      onDone: (w, result) => finishWindow(cache.doneWindows.commits, w, result),
+      onDone: (w, result) => finishWindow(cache.doneWindows.commits, w, result, flush),
       onEmptyPageRetry,
       onShortRead: onShortRead('commits', 'commits'),
       onProgress: (w, total) => {
@@ -174,11 +156,11 @@ async function main(): Promise<void> {
   const prFetcher = makePrFetcher(LOGIN, rl)
   for (const seed of yearWindows(prStart, rangeEnd)) {
     await collectWindow<ParsedPr>(seed, prFetcher, {
-      isDone: isDone(cache.doneWindows.prs),
+      isDone: makeIsDone(cache.doneWindows.prs, staleFrom),
       onItems: async (items) => {
         for (const p of items) cache.prs[p.id] = p.record
       },
-      onDone: (w, result) => finishWindow(cache.doneWindows.prs, w, result),
+      onDone: (w, result) => finishWindow(cache.doneWindows.prs, w, result, flush),
       onEmptyPageRetry,
       onShortRead: onShortRead('merged PRs', 'prs'),
       onProgress: (w, total) => {
@@ -247,13 +229,20 @@ async function main(): Promise<void> {
   console.log(`Wrote ${OUT_PATH}`)
 }
 
-main().catch((err: unknown) => {
-  if (err instanceof GhError) {
-    console.error(`\n${err.message}`)
-    if (err.stderr) console.error(err.stderr)
-  } else {
-    console.error('\nSync failed:', err)
-  }
-  console.error('\nProgress is cached — re-run `pnpm sync` to resume.')
-  process.exit(1)
-})
+/**
+ * Only run the backfill when this file *is* the command being run. Without the
+ * guard, merely importing this module — which a test must be able to do — would
+ * fire ~104 live API requests against a real account.
+ */
+if (isEntryPoint(process.argv[1], import.meta.url)) {
+  main().catch((err: unknown) => {
+    if (err instanceof GhError) {
+      console.error(`\n${err.message}`)
+      if (err.stderr) console.error(err.stderr)
+    } else {
+      console.error('\nSync failed:', err)
+    }
+    console.error('\nProgress is cached — re-run `pnpm sync` to resume.')
+    process.exit(1)
+  })
+}
