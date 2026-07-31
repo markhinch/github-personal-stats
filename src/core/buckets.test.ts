@@ -98,8 +98,24 @@ describe('bucketKeyOf', () => {
     expect(bucketKeyOf('2023-01-01T10:00:00.000+01:00', 'week')).toBe('2022-W52')
   })
 
-  it('sorts keys chronologically as plain strings', () => {
-    const keys = ['2026-W09', '2026-W10', '2026-W02']
+  it('zero-pads a single-digit ISO week', () => {
+    // Mon 5 Jan 2026 opens ISO week 2 — the key must be "2026-W02", not "2026-W2".
+    expect(bucketKeyOf('2026-01-05T10:00:00.000+01:00', 'week')).toBe('2026-W02')
+  })
+
+  it('assigns a date in the leading edge of a 53-week ISO year to the previous year', () => {
+    // Fri 1 Jan 2027 belongs to ISO week 53 of 2026, a 53-week year.
+    expect(bucketKeyOf('2027-01-01T10:00:00.000+01:00', 'week')).toBe('2026-W53')
+  })
+
+  it('sorts derived keys chronologically as plain strings', () => {
+    // The keys must come from the module, not from the keyboard: single-digit
+    // week padding is what makes plain string sort match chronological order.
+    const keys = [
+      bucketKeyOf('2026-03-02T09:00:00.000+01:00', 'week'), // W10
+      bucketKeyOf('2026-01-05T10:00:00.000+01:00', 'week'), // W02
+      bucketKeyOf('2026-02-23T12:00:00.000+01:00', 'week'), // W09
+    ]
     expect([...keys].sort()).toEqual(['2026-W02', '2026-W09', '2026-W10'])
   })
 })
@@ -115,6 +131,12 @@ describe('bucketStartOf', () => {
 
   it('round-trips a week key belonging to the previous calendar year', () => {
     expect(bucketStartOf('2022-W52', 'week')).toEqual({ year: 2022, month: 12, day: 26 })
+  })
+
+  it('round-trips week 53 of a 53-week ISO year', () => {
+    // Pairs with the bucketKeyOf('2027-01-01…') case above: 1 Jan 2027 maps to
+    // 2026-W53, and 2026-W53 maps back to its Monday, Mon 28 Dec 2026.
+    expect(bucketStartOf('2026-W53', 'week')).toEqual({ year: 2026, month: 12, day: 28 })
   })
 
   it('throws on a malformed key', () => {
