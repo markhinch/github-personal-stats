@@ -73,8 +73,8 @@ pnpm test
 The highest-value test in the suite asserts that a window reporting more than 1,000
 results is split rather than truncated — the bug it guards against would silently
 lose several hundred commits in a dense month while producing a chart that looks
-entirely plausible. That's not a hypothetical for this account: several months in
-2026 genuinely exceed 1,000 commits on their own. A related test covers the companion
+entirely plausible. That's not a hypothetical for this account: two months in
+2026 genuinely exceed 1,000 commits on their own (May and July). A related test covers the companion
 failure mode — GitHub can serve an empty page under soft-throttling even while its
 own count still promises more results, and trusting that empty page as "done" would
 under-report just as silently.
