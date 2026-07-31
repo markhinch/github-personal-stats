@@ -183,6 +183,34 @@ export function makePrFetcher(login: string, rl: RateLimiter): PageFetcher<Parse
 
 // ---------- viewer metadata ----------
 
+/**
+ * Orgs the authenticated user belongs to, used to attribute a commit that
+ * appears in several repos of a fork network to our own copy.
+ *
+ * Discovered rather than configured: a hardcoded list would rot the moment the
+ * human joins or leaves an org. One request, no pagination — `per_page=100` is
+ * far beyond any realistic membership count, and `gh api --paginate` would
+ * concatenate pages into invalid JSON.
+ */
+export async function fetchViewerOrgs(): Promise<string[]> {
+  const json = await ghJson<unknown>(['api', '-X', 'GET', 'user/orgs', '-f', 'per_page=100'])
+  if (!Array.isArray(json)) {
+    throw new Error('Expected an array from user/orgs — API shape may have changed')
+  }
+  const logins: string[] = []
+  for (const raw of json) {
+    const login = (raw as { login?: string }).login
+    // Warn rather than abort: a nameless org would only weaken attribution,
+    // but silence would make a wrong org split impossible to explain.
+    if (!login) {
+      console.warn('Skipping an org from user/orgs with no login field')
+      continue
+    }
+    logins.push(login)
+  }
+  return logins
+}
+
 /** The account creation date, used as the default backfill start. */
 export async function fetchViewerCreatedAt(): Promise<string> {
   const json = await ghJson<{ data: { viewer: { createdAt: string } } }>([

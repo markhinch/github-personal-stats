@@ -8,8 +8,9 @@ import {
 } from './windows'
 import { emptyCache, loadCache, saveCache } from './cache'
 import {
-  fetchViewerCreatedAt, makeCommitFetcher, makePrFetcher, type ParsedPr,
+  fetchViewerCreatedAt, fetchViewerOrgs, makeCommitFetcher, makePrFetcher, type ParsedPr,
 } from './fetchers'
+import { preferRepo, type OwnedIdentity } from './attribution'
 import type { CommitRecord, Dataset } from '../core/types'
 
 const LOGIN = 'markhinch'
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
   const cache = full ? emptyCache() : await loadCache(CACHE_PATH)
   const rangeEnd = today()
   const accountStart = await fetchViewerCreatedAt()
+  const identity: OwnedIdentity = { login: LOGIN, orgs: await fetchViewerOrgs() }
 
   // Incremental runs re-scan a short overlap; a full run rebuilds from scratch.
   const commitStart = !full && cache.watermark.commits
@@ -55,6 +57,7 @@ async function main(): Promise<void> {
   }
   console.log(`Commits: ${commitStart} → ${rangeEnd}`)
   console.log(`PRs:     ${prStart} → ${rangeEnd}`)
+  console.log(`Attributing fork-duplicated commits to: ${[LOGIN, ...identity.orgs].join(', ')}`)
   console.log(`Search limited to ${SEARCH_PER_MINUTE}/min; a cold backfill takes ~4-5 minutes.\n`)
 
   const rl = new RateLimiter(SEARCH_PER_MINUTE)
@@ -127,7 +130,10 @@ async function main(): Promise<void> {
     await collectWindow<CommitRecord>(seed, commitFetcher, {
       isDone: isDone(cache.doneWindows.commits),
       onItems: async (items) => {
-        for (const c of items) cache.commits[c.sha] = c // dedupe by SHA
+        // Dedupe by SHA. Search returns one row per (commit x repository), so a
+        // commit in a fork network arrives once per copy; preferRepo picks which
+        // copy it is filed under, independently of the order they arrive in.
+        for (const c of items) cache.commits[c.sha] = preferRepo(cache.commits[c.sha], c, identity)
         commitCount += items.length
       },
       onDone: (w, result) => finishWindow(cache.doneWindows.commits, w, result),
