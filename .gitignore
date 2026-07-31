@@ -1,0 +1,9 @@
+node_modules/
+dist/
+
+# Brainstorming mockups (visual companion session files)
+.superpowers/
+
+# Ingest cache + generated dataset — rebuild with `pnpm sync`
+.cache/
+public/data.json
