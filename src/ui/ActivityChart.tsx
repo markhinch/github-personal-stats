@@ -1,32 +1,10 @@
-import { useEffect, useState } from 'react'
 import {
-  Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
+import type { LabelListEntry } from 'recharts'
 import type { Metric, SeriesPoint } from '../core/types'
-
-const compact = new Intl.NumberFormat('en-GB', { notation: 'compact' })
-const full = new Intl.NumberFormat('en-GB')
-
-// dataviz skill palette (references/palette.md): categorical slot 1 (blue), the
-// hairline gridline/axis tokens, and the chart surface — swapped per color-scheme
-// since Recharts takes literal color props rather than CSS custom properties.
-const PALETTE = {
-  light: { mark: '#2a78d6', grid: '#e1e0d9', axis: '#898781', surface: '#fcfcfb', border: 'rgba(11,11,11,0.10)' },
-  dark: { mark: '#3987e5', grid: '#2c2c2a', axis: '#898781', surface: '#1a1a19', border: 'rgba(255,255,255,0.10)' },
-} as const
-
-function usePrefersDark(): boolean {
-  const [dark, setDark] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches,
-  )
-  useEffect(() => {
-    const mql = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = (e: MediaQueryListEvent): void => setDark(e.matches)
-    mql.addEventListener('change', onChange)
-    return () => mql.removeEventListener('change', onChange)
-  }, [])
-  return dark
-}
+import { formatCompact, formatExact, formatMetricLabel } from './format'
+import { labelledIndices } from './labels'
 
 interface Props {
   series: SeriesPoint[]
@@ -42,14 +20,12 @@ interface Props {
 }
 
 export function ActivityChart({ series, metric, hasOrgs }: Props) {
-  const colors = usePrefersDark() ? PALETTE.dark : PALETTE.light
-
   if (series.length === 0) {
     const message = hasOrgs
       ? 'Nothing to show — select at least one organisation.'
       : 'Nothing to show — this dataset has no commits or merged pull requests yet. Run `pnpm sync` to refresh it.'
     return (
-      <div className="flex h-80 items-center justify-center rounded-xl border border-dashed border-neutral-300 text-center text-sm text-neutral-500 dark:border-neutral-700">
+      <div className="flex h-80 items-center justify-center rounded-xl border border-dashed border-baseline px-6 text-center text-sm text-muted">
         {message}
       </div>
     )
@@ -57,34 +33,82 @@ export function ActivityChart({ series, metric, hasOrgs }: Props) {
 
   const name = metric === 'commits' ? 'Commits' : 'Lines changed'
 
+  // Keyed by bucket, not by position: Recharts omits zero-height bars from the
+  // label list, so its label index counts *rendered bars* and drifts from the
+  // data index as soon as the series contains an empty bucket.
+  const labelledKeys = new Set(
+    [...labelledIndices(series.map((p) => p.value))].map((i) => series[i]!.key),
+  )
+
+  const valueLabel = (entry: LabelListEntry): string => {
+    const point = entry.payload as SeriesPoint | undefined
+    if (point === undefined || !labelledKeys.has(point.key)) return ''
+    return formatMetricLabel(metric, point.value)
+  }
+
   return (
     <div className="h-80 w-full">
       <ResponsiveContainer>
-        <BarChart data={series} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-          <CartesianGrid vertical={false} stroke={colors.grid} />
+        {/*
+          The top margin clears the value label above the tallest bar; the right
+          margin keeps the last bar's label from being clipped by the plot edge.
+        */}
+        <BarChart data={series} margin={{ top: 24, right: 22, bottom: 0, left: 0 }}>
+          <CartesianGrid vertical={false} stroke="var(--color-grid)" />
           <XAxis
             dataKey="label"
-            tick={{ fontSize: 11, fill: colors.axis }}
-            stroke={colors.grid}
+            tick={{ fontSize: 11, fill: 'var(--color-muted)' }}
+            stroke="var(--color-baseline)"
+            tickLine={false}
+            tickMargin={8}
             interval="preserveStartEnd"
-            minTickGap={24}
+            // Small enough that a 12-month view labels every month; wide views
+            // still thin their ticks, since the labels simply cannot all fit.
+            minTickGap={12}
           />
           <YAxis
-            tick={{ fontSize: 11, fill: colors.axis }}
-            stroke={colors.grid}
-            tickFormatter={(v: number) => compact.format(v)}
+            tick={{ fontSize: 11, fill: 'var(--color-muted)' }}
+            stroke="var(--color-grid)"
+            tickLine={false}
+            axisLine={false}
+            tickFormatter={(v: number) => formatCompact(v)}
             width={44}
           />
           <Tooltip
-            formatter={(v) => [full.format(Number(v)), name]}
+            cursor={{ fill: 'var(--color-grid)', fillOpacity: 0.45 }}
+            formatter={(v) => [formatExact(Number(v)), name]}
             contentStyle={{
               fontSize: 12,
-              borderRadius: 8,
-              background: colors.surface,
-              border: `1px solid ${colors.border}`,
+              borderRadius: 10,
+              background: 'var(--color-surface)',
+              border: '1px solid var(--color-hairline)',
+              boxShadow: '0 4px 12px rgba(11,11,11,0.08)',
             }}
+            labelStyle={{ color: 'var(--color-ink)', fontWeight: 600 }}
           />
-          <Bar dataKey="value" name={name} fill={colors.mark} radius={[4, 4, 0, 0]} maxBarSize={24} />
+          {/*
+            No entry animation: the value labels don't animate with the bars, so
+            they hang in mid-air over growing bars, and a chart that exists to be
+            screenshotted should be final the moment it paints.
+          */}
+          <Bar
+            dataKey="value"
+            name={name}
+            fill="var(--color-series-1)"
+            radius={[4, 4, 0, 0]}
+            maxBarSize={24}
+            isAnimationActive={false}
+          >
+            {/* Text wears an ink token, never the mark's blue. */}
+            <LabelList
+              valueAccessor={valueLabel}
+              position="top"
+              offset={8}
+              fill="var(--color-ink-2)"
+              fontSize={11}
+              fontWeight={600}
+            />
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </div>

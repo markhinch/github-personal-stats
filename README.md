@@ -1,8 +1,9 @@
 # GitHub Personal Stats
 
-A local dashboard of my own GitHub commit activity over time: one bar chart, bucketed
-by ISO week or calendar month, with a commits/lines-changed toggle and organisation
-checkboxes.
+A local dashboard of my own GitHub commit activity over time: a row of headline stat
+tiles above one bar chart with its values written on the bars, bucketed by ISO week
+or calendar month, filtered by metric (commits / lines changed), trailing time range,
+and organisation.
 
 It exists because the GitHub profile contribution graph is useless for this account —
 all the work is in private repositories, so the calendar API returns only an opaque

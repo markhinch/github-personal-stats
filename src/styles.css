@@ -1,1 +1,62 @@
 @import "tailwindcss";
+
+/*
+ * Design tokens — the dataviz skill's reference palette (references/palette.md),
+ * exposed as Tailwind theme colours so chart marks and UI chrome are drawn from
+ * one set of values. Recharts takes literal colour props, but CSS custom
+ * properties resolve fine as SVG attribute values, so the chart reads these
+ * tokens directly and follows the colour scheme without a JS media-query hook.
+ *
+ * The dark column is *selected* for the dark surface, not an automatic flip.
+ */
+@theme {
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-plane: #f9f9f7;
+  --color-surface: #fcfcfb;
+  --color-ink: #0b0b0b;
+  --color-ink-2: #52514e;
+  --color-muted: #898781;
+  --color-grid: #e1e0d9;
+  --color-baseline: #c3c2b7;
+  --color-hairline: rgba(11, 11, 11, 0.1);
+
+  /* Categorical slot 1 (blue) — the bar fill. */
+  --color-series-1: #2a78d6;
+  /*
+   * Sequential blue step 500: one step darker than the mark, and the only one
+   * of the two that clears WCAG's 4.5:1 floor for white UI text (5.39:1 in both
+   * modes; the mark hex manages 4.42:1 light / 3.64:1 dark, since it was only
+   * validated for mark-vs-surface contrast at >=3:1). Used for filled controls.
+   */
+  --color-accent: #256abf;
+  /* A wash of the mark hue, for selected-but-quiet controls. */
+  --color-accent-wash: rgba(42, 120, 214, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-plane: #0d0d0d;
+    --color-surface: #1a1a19;
+    --color-ink: #ffffff;
+    --color-ink-2: #c3c2b7;
+    --color-muted: #898781;
+    --color-grid: #2c2c2a;
+    --color-baseline: #383835;
+    --color-hairline: rgba(255, 255, 255, 0.1);
+    --color-series-1: #3987e5;
+    --color-accent: #256abf;
+    --color-accent-wash: rgba(57, 135, 229, 0.18);
+  }
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background-color: var(--color-plane);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
