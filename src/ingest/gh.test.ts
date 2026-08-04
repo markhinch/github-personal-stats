@@ -68,6 +68,66 @@ describe('ghJson', () => {
   })
 })
 
+describe('GhError transience', () => {
+  /** Runs a failing invocation and hands back the GhError it rejected with. */
+  async function failWith(stderr: string, code?: string): Promise<GhError> {
+    const exec: FakeExec = (_bin, _args, _options, cb) => {
+      const err = Object.assign(new Error('exit status 1'), code ? { code } : {})
+      cb(err, '', stderr)
+    }
+    try {
+      await ghJson(['api', 'graphql'], { exec })
+    } catch (err) {
+      return err as GhError
+    }
+    throw new Error('expected the invocation to reject')
+  }
+
+  // Verbatim stderr from the run that motivated this: `gh api graphql` on a
+  // deep search cursor. gh reports the status and nothing else machine-readable,
+  // so the status has to be recovered from the text.
+  it('reads the status out of gh\'s bare `gh: HTTP 502` stderr', async () => {
+    const err = await failWith('gh: HTTP 502\n')
+    expect(err.status).toBe(502)
+    expect(err.transient).toBe(true)
+  })
+
+  it('reads the status out of the parenthesised `(HTTP 404)` form', async () => {
+    const err = await failWith('gh: Not Found (HTTP 404)')
+    expect(err.status).toBe(404)
+    expect(err.transient).toBe(false)
+  })
+
+  it.each([500, 502, 503, 504, 429])('treats HTTP %i as transient', async (status) => {
+    expect((await failWith(`gh: HTTP ${status}`)).transient).toBe(true)
+  })
+
+  // These must fail fast. Retrying them burns minutes of backoff to arrive at
+  // the same answer, and hides the misconfiguration behind the delay.
+  it.each([401, 403, 404, 422])('treats HTTP %i as permanent', async (status) => {
+    expect((await failWith(`gh: HTTP ${status}`)).transient).toBe(false)
+  })
+
+  it('treats a missing binary as permanent, with no status', async () => {
+    const err = await failWith('', 'ENOENT')
+    expect(err.status).toBeUndefined()
+    expect(err.transient).toBe(false)
+  })
+
+  // No status reported at all — a DNS failure, a dropped socket, a gh crash.
+  // Deliberately permanent: the fix is narrow to the failure actually observed,
+  // and a genuinely broken setup must not be retried into looking like slowness.
+  it('treats a failure with no HTTP status as permanent', async () => {
+    const err = await failWith('some other gh problem')
+    expect(err.status).toBeUndefined()
+    expect(err.transient).toBe(false)
+  })
+
+  it('does not mistake a digit run inside a message for a status', async () => {
+    expect((await failWith('gh: repo 502 not found')).status).toBeUndefined()
+  })
+})
+
 describe('assertGhReady', () => {
   it('resolves when gh returns an authenticated login', async () => {
     const exec: FakeExec = (_bin, _args, _options, cb) => {

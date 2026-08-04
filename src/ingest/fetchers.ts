@@ -1,8 +1,48 @@
-import { ghJson } from './gh'
+import { ghJson, GhError, TRANSIENT_RETRIES } from './gh'
 import { isRepoId } from '../core/orgs'
 import type { RateLimiter } from './ratelimit'
 import { PER_PAGE, windowKey, type DateWindow, type PageFetcher } from './windows'
 import type { CommitRecord, MergedPrRecord } from '../core/types'
+
+export interface FetcherHooks {
+  /**
+   * Called before re-attempting a request that failed transiently.
+   *
+   * The hook owns the delay — it typically calls `RateLimiter.pauseFor`, which
+   * the retry's own `acquire()` then honours. Keeping the duration policy in the
+   * caller mirrors `CollectOptions.onEmptyPageRetry`, so both backoffs are
+   * configured in one place and tests never sleep.
+   */
+  onTransientError?: (err: GhError, attempt: number) => Promise<void> | void
+}
+
+/**
+ * Runs a rate-limited `gh` request, re-attempting transient failures.
+ *
+ * The retry lives here rather than inside `ghJson` because it must re-`acquire()`
+ * the limiter each time: the pause the hook requests takes effect on the next
+ * acquire, so a loop wrapped tightly around `ghJson` alone would ignore its own
+ * backoff. Re-acquiring also keeps the request budget honest — a retry is a real
+ * request against the 30/min search limit.
+ *
+ * The identical argument array is re-sent, cursor included, so a retry resumes
+ * the page that failed instead of restarting the window.
+ */
+async function ghJsonRetrying<T>(
+  args: string[],
+  rl: RateLimiter,
+  hooks: FetcherHooks,
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    await rl.acquire()
+    try {
+      return await ghJson<T>(args)
+    } catch (err) {
+      if (!(err instanceof GhError) || !err.transient || attempt > TRANSIENT_RETRIES) throw err
+      await hooks.onTransientError?.(err, attempt)
+    }
+  }
+}
 
 // ---------- commits (REST search) ----------
 
@@ -48,15 +88,18 @@ export function parseCommitSearchResponse(json: unknown): {
 }
 
 /** A rate-limited page fetcher for commits authored by `login`. */
-export function makeCommitFetcher(login: string, rl: RateLimiter): PageFetcher<CommitRecord> {
+export function makeCommitFetcher(
+  login: string,
+  rl: RateLimiter,
+  hooks: FetcherHooks = {},
+): PageFetcher<CommitRecord> {
   return async (w: DateWindow, page: number) => {
-    await rl.acquire()
-    const json = await ghJson<unknown>([
+    const json = await ghJsonRetrying<unknown>([
       'api', '-X', 'GET', 'search/commits',
       '-f', `q=author:${login} author-date:${w.start}..${w.end}`,
       '-f', `per_page=${PER_PAGE}`,
       '-f', `page=${page}`,
-    ])
+    ], rl, hooks)
     return parseCommitSearchResponse(json)
   }
 }
@@ -164,7 +207,11 @@ query($q: String!, $cursor: String) {
  *
  * Cursor pagination is mapped onto page numbers by walking cursors internally.
  */
-export function makePrFetcher(login: string, rl: RateLimiter): PageFetcher<ParsedPr> {
+export function makePrFetcher(
+  login: string,
+  rl: RateLimiter,
+  hooks: FetcherHooks = {},
+): PageFetcher<ParsedPr> {
   // Cursors per window, so repeated page-N requests stay coherent.
   const cursors = new Map<string, string[]>()
 
@@ -179,8 +226,7 @@ export function makePrFetcher(login: string, rl: RateLimiter): PageFetcher<Parse
     const cursor = page > 1 ? known[page - 2] : undefined
     if (cursor) args.push('-f', `cursor=${cursor}`)
 
-    await rl.acquire()
-    const parsed = parsePrSearchResponse(await ghJson<unknown>(args))
+    const parsed = parsePrSearchResponse(await ghJsonRetrying<unknown>(args, rl, hooks))
     if (parsed.pageInfo.endCursor) {
       known[page - 1] = parsed.pageInfo.endCursor
       cursors.set(key, known)

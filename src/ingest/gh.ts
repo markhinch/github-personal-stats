@@ -1,9 +1,55 @@
 import { execFile, type ExecFileException } from 'node:child_process'
 
+/**
+ * How many times a transient failure is re-attempted before the run gives up.
+ *
+ * Three is enough for the observed failure — a search-backend 502 that clears in
+ * seconds — while staying bounded, so a sustained outage still ends the run with
+ * an error instead of stalling behind minutes of backoff.
+ */
+export const TRANSIENT_RETRIES = 3
+
+/**
+ * The HTTP status `gh` reported, if any.
+ *
+ * `gh api` exits non-zero with the status only in prose — `gh: HTTP 502` for a
+ * GraphQL call, `gh: Not Found (HTTP 404)` for REST — and offers nothing
+ * machine-readable, so the text is the only source. The `HTTP` literal is
+ * required: without it any three-digit run in an error message would parse as a
+ * status, and a misread status decides whether we retry.
+ */
+export function parseHttpStatus(stderr: string): number | undefined {
+  const m = /\bHTTP (\d{3})\b/.exec(stderr)
+  return m ? Number(m[1]) : undefined
+}
+
+/**
+ * Whether a status is worth re-attempting: server-side 5xx, plus 429.
+ *
+ * Deliberately narrow. 401/403/404/422 mean the request itself is wrong, and
+ * retrying them spends minutes of backoff to reach the same answer while making
+ * a misconfiguration look like slowness. A failure that reports no status at all
+ * (DNS, a dropped socket, a missing binary) is likewise treated as permanent —
+ * this exists for the failure actually observed, not for every way gh can fail.
+ */
+export function isTransientStatus(status: number | undefined): boolean {
+  if (status === undefined) return false
+  return status === 429 || (status >= 500 && status < 600)
+}
+
 export class GhError extends Error {
+  /** The HTTP status gh reported, when its stderr named one. */
+  readonly status: number | undefined
+
   constructor(message: string, readonly stderr = '') {
     super(message)
     this.name = 'GhError'
+    this.status = parseHttpStatus(stderr)
+  }
+
+  /** Whether re-running the identical request could plausibly succeed. */
+  get transient(): boolean {
+    return isTransientStatus(this.status)
   }
 }
 

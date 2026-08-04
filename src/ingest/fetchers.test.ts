@@ -8,6 +8,7 @@ import {
   fetchViewerCreatedAt,
 } from './fetchers'
 import { RateLimiter } from './ratelimit'
+import { GhError, TRANSIENT_RETRIES } from './gh'
 import { PER_PAGE } from './windows'
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }))
@@ -268,6 +269,125 @@ function stubExec(responses: unknown[]) {
   }) as unknown as typeof cp.execFile)
   return calls
 }
+
+/** One scripted `execFile` outcome: a JSON payload, or a failure with stderr. */
+type ExecStep = { payload: unknown } | { stderr: string }
+
+/**
+ * Queues outcomes for successive `execFile` calls, so a test can fail a request
+ * and then serve it. Unlike `stubExec` the last step does not repeat — running
+ * off the end is a test bug worth surfacing, not a silent success.
+ */
+function stubExecSteps(steps: ExecStep[]) {
+  const calls: string[][] = []
+  let i = 0
+  vi.mocked(cp.execFile).mockImplementation(((_bin: string, args: string[], _opts: unknown, cb: ExecCallback) => {
+    calls.push(args)
+    const step = steps[i]
+    i += 1
+    if (!step) {
+      cb(Object.assign(new Error('exit status 1'), {}), '', 'gh: HTTP 404 (unscripted extra call)')
+      return
+    }
+    if ('stderr' in step) {
+      cb(Object.assign(new Error('exit status 1'), {}), '', step.stderr)
+      return
+    }
+    cb(null, JSON.stringify(step.payload), '')
+  }) as unknown as typeof cp.execFile)
+  return calls
+}
+
+const PR_PAGE = {
+  data: {
+    search: {
+      issueCount: 1,
+      pageInfo: { hasNextPage: false },
+      nodes: [{
+        id: 'PR_1', mergedAt: '2026-06-30T12:00:00Z', additions: 1, deletions: 1,
+        repository: { nameWithOwner: 'a/b' },
+      }],
+    },
+  },
+}
+
+/**
+ * A transient HTTP 502 from GitHub's search backend must not end a multi-minute
+ * backfill. This is the failure that motivated the retry: the identical request
+ * — same window, same cursor — succeeded on a later run.
+ */
+describe('fetcher transient-error retry', () => {
+  const window = { start: '2026-01-01', end: '2026-08-04' }
+
+  beforeEach(() => {
+    vi.mocked(cp.execFile).mockReset()
+  })
+
+  it('retries a 502 and returns the page the retry served', async () => {
+    const calls = stubExecSteps([{ stderr: 'gh: HTTP 502\n' }, { payload: PR_PAGE }])
+    const rl = new RateLimiter(28, { now: () => 0, sleep: async () => {} })
+    const fetch = makePrFetcher('markhinch', rl)
+
+    const res = await fetch(window, 1)
+
+    expect(res.items).toHaveLength(1)
+    expect(calls).toHaveLength(2)
+    // The retry must re-send the same query, cursor included — not restart the window.
+    expect(calls[1]).toEqual(calls[0])
+  })
+
+  it('reports each retry, and re-acquires the limiter so the hook\'s pause is honoured', async () => {
+    stubExecSteps([{ stderr: 'gh: HTTP 502' }, { stderr: 'gh: HTTP 503' }, { payload: PR_PAGE }])
+    const rl = new RateLimiter(28, { now: () => 0, sleep: async () => {} })
+    const acquire = vi.spyOn(rl, 'acquire')
+    const seen: Array<{ status?: number; attempt: number }> = []
+    const fetch = makePrFetcher('markhinch', rl, {
+      onTransientError: (err, attempt) => {
+        seen.push({ status: err.status, attempt })
+      },
+    })
+
+    await fetch(window, 1)
+
+    expect(seen).toEqual([{ status: 502, attempt: 1 }, { status: 503, attempt: 2 }])
+    // Three attempts, three acquires: a retry that skipped acquire() would both
+    // ignore the backoff the hook just requested and under-count the request.
+    expect(acquire).toHaveBeenCalledTimes(3)
+  })
+
+  it('gives up after TRANSIENT_RETRIES and rethrows the last GhError', async () => {
+    const calls = stubExecSteps(
+      Array.from({ length: TRANSIENT_RETRIES + 1 }, () => ({ stderr: 'gh: HTTP 502' })),
+    )
+    const rl = new RateLimiter(28, { now: () => 0, sleep: async () => {} })
+    const fetch = makePrFetcher('markhinch', rl)
+
+    await expect(fetch(window, 1)).rejects.toThrow(GhError)
+    expect(calls).toHaveLength(TRANSIENT_RETRIES + 1)
+  })
+
+  it('does not retry a permanent failure', async () => {
+    const calls = stubExecSteps([{ stderr: 'gh: Not Found (HTTP 404)' }])
+    const rl = new RateLimiter(28, { now: () => 0, sleep: async () => {} })
+    const onTransientError = vi.fn()
+    const fetch = makePrFetcher('markhinch', rl, { onTransientError })
+
+    await expect(fetch(window, 1)).rejects.toThrow(GhError)
+    expect(calls).toHaveLength(1)
+    expect(onTransientError).not.toHaveBeenCalled()
+  })
+
+  it('retries commits on the same terms as PRs', async () => {
+    const calls = stubExecSteps([{ stderr: 'gh: HTTP 502' }, { payload: COMMIT_PAYLOAD }])
+    const rl = new RateLimiter(28, { now: () => 0, sleep: async () => {} })
+    const fetch = makeCommitFetcher('markhinch', rl)
+
+    const res = await fetch(window, 1)
+
+    expect(res.totalCount).toBe(246)
+    expect(calls).toHaveLength(2)
+  })
+})
 
 describe('makeCommitFetcher', () => {
   beforeEach(() => {

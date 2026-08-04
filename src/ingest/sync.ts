@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { assertGhReady, GhError } from './gh'
+import { assertGhReady, GhError, TRANSIENT_RETRIES } from './gh'
 import { RateLimiter } from './ratelimit'
 import {
   collectWindow, windowKey, yearWindows, EMPTY_PAGE_RETRIES, SEARCH_RESULT_CAP,
@@ -104,6 +104,24 @@ export async function main(): Promise<void> {
     )
   }
 
+  /**
+   * A transient API failure (a search-backend 502, a 503, a 429) pauses and
+   * re-attempts the same request rather than ending the run.
+   *
+   * Worth the wait: without it a single 502 discarded a whole 4-5 minute
+   * backfill, and the identical request — same window, same cursor — succeeded on
+   * the following run. Same backoff as the empty-page path, so there is one
+   * retry-delay policy to reason about.
+   */
+  const onTransientError = (err: GhError, attempt: number): void => {
+    const wait = retryBackoffMs(attempt)
+    rl.pauseFor(wait)
+    console.error(
+      `  .. request failed with HTTP ${err.status ?? '?'}; retrying in ` +
+      `${Math.round(wait / 1000)}s (attempt ${attempt}/${TRANSIENT_RETRIES}).`,
+    )
+  }
+
   const onShortRead = (noun: string, metric: 'commits' | 'prs') =>
     (w: DateWindow, collected: number, expected: number): void => {
       shortReads[metric].push(`${windowKey(w)} (${collected}/${expected} ${noun})`)
@@ -116,7 +134,7 @@ export async function main(): Promise<void> {
     }
 
   // ---- commits ----
-  const commitFetcher = makeCommitFetcher(LOGIN, rl)
+  const commitFetcher = makeCommitFetcher(LOGIN, rl, { onTransientError })
   let commitCount = 0
   for (const seed of yearWindows(commitStart, rangeEnd)) {
     await collectWindow<CommitRecord>(seed, commitFetcher, {
@@ -153,7 +171,7 @@ export async function main(): Promise<void> {
   cache.watermark.commits = nextWatermark(rangeEnd, shortReadStarts.commits)
 
   // ---- merged PRs ----
-  const prFetcher = makePrFetcher(LOGIN, rl)
+  const prFetcher = makePrFetcher(LOGIN, rl, { onTransientError })
   for (const seed of yearWindows(prStart, rangeEnd)) {
     await collectWindow<ParsedPr>(seed, prFetcher, {
       isDone: makeIsDone(cache.doneWindows.prs, staleFrom),
