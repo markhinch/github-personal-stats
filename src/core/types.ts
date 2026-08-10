@@ -31,6 +31,8 @@ export interface Dataset {
 
 export type Bucket = 'week' | 'month'
 export type Metric = 'commits' | 'lines'
+/** Whether bars are drawn as one total or split by repository. */
+export type Split = 'none' | 'repo'
 
 /** A timezone-free calendar date. Month is 1-12, day is 1-31. */
 export interface LocalDate {

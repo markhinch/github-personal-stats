@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
-import { buildSeries } from './core/aggregate'
+import { buildRepoSeries, buildSeries } from './core/aggregate'
 import { listOrgs } from './core/orgs'
-import type { Bucket, Metric, SeriesPoint } from './core/types'
+import { foldToTopRepos } from './core/topRepos'
+import type { Bucket, Metric, SeriesPoint, Split } from './core/types'
 import { ActivityChart } from './ui/ActivityChart'
 import { Controls } from './ui/Controls'
 import { StatTiles, type Tile } from './ui/StatTiles'
 import { formatExact, formatMetric, metricNoun } from './ui/format'
+import { MAX_SERIES } from './ui/palette'
 import { bucketsInRange, windowSeries, windowStartKey, type RangeId } from './ui/range'
 import { useDataset } from './ui/useDataset'
 
@@ -23,6 +25,7 @@ export default function App() {
   const [bucket, setBucket] = useState<Bucket>('month')
   const [metric, setMetric] = useState<Metric>('commits')
   const [range, setRange] = useState<RangeId>('1y')
+  const [split, setSplit] = useState<Split>('none')
   const [deselected, setDeselected] = useState<Set<string>>(new Set())
 
   const orgs = useMemo(
@@ -43,8 +46,27 @@ export default function App() {
     const commits = buildSeries(state.dataset, { bucket, metric: 'commits', orgs: selectedOrgs })
     const lines = buildSeries(state.dataset, { bucket, metric: 'lines', orgs: selectedOrgs })
     const start = windowStartKey([commits, lines], bucketsInRange(range, bucket))
-    return { commits: windowSeries(commits, start), lines: windowSeries(lines, start) }
-  }, [state, bucket, range, selectedOrgs])
+
+    // Built for the selected metric only. The two total series are both built
+    // because the tiles show commits and churn together; nothing on screen
+    // needs the unselected metric's split.
+    const stack =
+      split === 'repo'
+        ? foldToTopRepos(
+            windowSeries(
+              buildRepoSeries(state.dataset, { bucket, metric, orgs: selectedOrgs }),
+              start,
+            ),
+            MAX_SERIES,
+          )
+        : null
+
+    return {
+      commits: windowSeries(commits, start),
+      lines: windowSeries(lines, start),
+      stack,
+    }
+  }, [state, bucket, metric, range, selectedOrgs, split])
 
   const series = view === null ? [] : view[metric === 'commits' ? 'commits' : 'lines']
 
@@ -150,11 +172,13 @@ export default function App() {
               bucket={bucket}
               metric={metric}
               range={range}
+              split={split}
               orgs={orgs}
               selectedOrgs={selectedOrgs}
               onBucket={setBucket}
               onMetric={setMetric}
               onRange={setRange}
+              onSplit={setSplit}
               onToggleOrg={toggleOrg}
             />
 
@@ -165,7 +189,12 @@ export default function App() {
               <p className="mt-0.5 text-xs text-muted">{stats?.span ?? 'No data in range'}</p>
 
               <div className="mt-4">
-                <ActivityChart series={series} metric={metric} hasOrgs={orgs.length > 0} />
+                <ActivityChart
+                  series={series}
+                  metric={metric}
+                  hasOrgs={orgs.length > 0}
+                  stack={view?.stack ?? null}
+                />
               </div>
             </div>
 
