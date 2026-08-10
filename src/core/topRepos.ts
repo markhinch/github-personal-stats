@@ -43,8 +43,14 @@ export function foldToTopRepos(points: readonly RepoPoint[], limit: number): Rep
     }
   }
 
+  // A repo with a zero window total (e.g. every merged PR crediting it had
+  // additions + deletions === 0) gets no slot: ranking it in would only ever
+  // cost a real repo its colour, or — past the limit — turn on an Other
+  // segment that is itself worth 0 in every bucket.
+  const nonZero = [...totals.keys()].filter((repo) => totals.get(repo)! > 0)
+
   // Descending by total, then by id, so equal totals never reorder run to run.
-  const ranked = [...totals.keys()].sort((a, b) => {
+  const ranked = nonZero.sort((a, b) => {
     const diff = totals.get(b)! - totals.get(a)!
     return diff !== 0 ? diff : a.localeCompare(b)
   })

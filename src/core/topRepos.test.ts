@@ -82,6 +82,23 @@ describe('foldToTopRepos', () => {
     expect(stack.hasOther).toBe(false)
     expect(stack.points).toHaveLength(2)
   })
+
+  it('gives a repo with only a zero window total no slot, and no Other on its own', () => {
+    // A merged PR with additions + deletions === 0 still records an explicit
+    // zero for its repo — real activity, but nothing to rank on.
+    const stack = foldToTopRepos([point('a', { 'o/1': 5, 'o/2': 4, 'o/3': 0 })], 5)
+    expect(stack.repos).toEqual(['o/1', 'o/2'])
+    expect(stack.hasOther).toBe(false)
+  })
+
+  it('excludes a zero-total repo from ranking even when it would otherwise fill the last slot', () => {
+    const stack = foldToTopRepos(
+      [point('a', { 'o/1': 5, 'o/2': 4, 'o/3': 3, 'o/4': 2, 'o/5': 1, 'o/zero': 0 })],
+      5,
+    )
+    expect(stack.repos).toEqual(['o/1', 'o/2', 'o/3', 'o/4', 'o/5'])
+    expect(stack.hasOther).toBe(false)
+  })
 })
 
 describe('buildRepoStack', () => {
