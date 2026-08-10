@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { RepoPoint, SeriesOptions } from './aggregate'
-import { OTHER_KEY, buildRepoStack, foldToTopRepos } from './topRepos'
+import {
+  breakdownRows, buildRepoStack, foldToTopRepos, OTHER_KEY, stackSegments, type RepoStack,
+} from './topRepos'
 import type { Dataset } from './types'
 
 /** Builds one bucket from a repo -> value map. */
@@ -113,5 +115,43 @@ describe('buildRepoStack', () => {
     ])
     const stack = buildRepoStack(ds, monthlyCommits, null, 5)
     expect(stack.points.map((p) => p.key)).toEqual(['2026-01', '2026-02', '2026-03'])
+  })
+})
+
+describe('breakdownRows', () => {
+  it('drops zero-valued repos', () => {
+    expect(breakdownRows({ 'o/a': 3, 'o/b': 0 })).toEqual([['o/a', 3]])
+  })
+
+  it('sorts by value descending', () => {
+    expect(breakdownRows({ 'o/small': 1, 'o/big': 10 })).toEqual([['o/big', 10], ['o/small', 1]])
+  })
+
+  it('forces Other last even when its value is the largest', () => {
+    expect(breakdownRows({ 'o/a': 1, [OTHER_KEY]: 99 })).toEqual([['o/a', 1], [OTHER_KEY, 99]])
+  })
+
+  it('returns an empty array for empty input', () => {
+    expect(breakdownRows({})).toEqual([])
+  })
+})
+
+describe('stackSegments', () => {
+  const stack = (repos: string[], hasOther: boolean): RepoStack => ({ repos, hasOther, points: [] })
+
+  it('appends Other only when hasOther is true', () => {
+    expect(stackSegments(stack(['o/a', 'o/b'], true))).toEqual(['o/a', 'o/b', OTHER_KEY])
+  })
+
+  it('omits Other when hasOther is false', () => {
+    expect(stackSegments(stack(['o/a', 'o/b'], false))).toEqual(['o/a', 'o/b'])
+  })
+
+  it('preserves repo order', () => {
+    expect(stackSegments(stack(['o/z', 'o/a'], false))).toEqual(['o/z', 'o/a'])
+  })
+
+  it('returns an empty array for an empty stack', () => {
+    expect(stackSegments(stack([], false))).toEqual([])
   })
 })

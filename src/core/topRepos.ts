@@ -85,3 +85,22 @@ export function buildRepoStack(
 ): RepoStack {
   return foldToTopRepos(windowSeries(buildRepoSeries(ds, opts), startKey), limit)
 }
+
+/** Rows for one bucket's breakdown: zero-valued repos dropped, descending, Other last. */
+export function breakdownRows(values: Record<string, number>): Array<[string, number]> {
+  // Zero-valued repos are padding for the stack's shape, not part of the
+  // bucket's story, so they are dropped here. Other always sorts last,
+  // regardless of value, so the catch-all reads as a footnote, not a winner.
+  return Object.entries(values)
+    .filter(([, value]) => value > 0)
+    .sort(([aKey, aValue], [bKey, bValue]) => {
+      if (aKey === OTHER_KEY) return 1
+      if (bKey === OTHER_KEY) return -1
+      return bValue - aValue
+    })
+}
+
+/** Stack order: ranked repos, then Other when present. Drives bar order, legend order and the rounded cap. */
+export function stackSegments(stack: RepoStack): string[] {
+  return stack.hasOther ? [...stack.repos, OTHER_KEY] : stack.repos
+}

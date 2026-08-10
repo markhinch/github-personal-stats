@@ -3,7 +3,7 @@ import {
 } from 'recharts'
 import type { LabelListEntry } from 'recharts'
 import type { Metric, SeriesPoint } from '../core/types'
-import { OTHER_KEY, type RepoStack, type StackPoint } from '../core/topRepos'
+import { breakdownRows, stackSegments, type RepoStack, type StackPoint } from '../core/topRepos'
 import { formatCompact, formatExact, formatMetricLabel } from './format'
 import { labelledIndices } from './labels'
 import { segmentColors } from './palette'
@@ -30,15 +30,7 @@ function RepoTooltip(props: {
   const point = props.payload?.[0]?.payload
   if (props.active !== true || point === undefined) return null
 
-  // Zero-valued repos are padding for the stack's shape, not part of the
-  // bucket's story, so they are dropped here. Other always sorts last.
-  const rows = Object.entries(point.values)
-    .filter(([, value]) => value > 0)
-    .sort(([aKey, aValue], [bKey, bValue]) => {
-      if (aKey === OTHER_KEY) return 1
-      if (bKey === OTHER_KEY) return -1
-      return bValue - aValue
-    })
+  const rows = breakdownRows(point.values)
 
   return (
     <div style={TOOLTIP_SURFACE} className="px-3 py-2">
@@ -189,7 +181,7 @@ export function ActivityChart({ series, metric, hasOrgs, stack }: Props) {
 }
 
 function StackedChart({ stack }: { stack: RepoStack }) {
-  const segments = stack.hasOther ? [...stack.repos, OTHER_KEY] : stack.repos
+  const segments = stackSegments(stack)
   const colors = segmentColors(stack.repos, stack.hasOther)
 
   return (
