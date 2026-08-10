@@ -9,6 +9,12 @@ import { labelledIndices } from './labels'
 import { segmentColors } from './palette'
 import { ChartLegend } from './ChartLegend'
 
+/**
+ * Shared tooltip chrome for both chart modes: the total mode hands this to
+ * Recharts' `contentStyle`, the repo mode spreads it onto its own custom
+ * tooltip element. One const so the two never drift apart the way two
+ * hand-copied literals would.
+ */
 const TOOLTIP_SURFACE = {
   fontSize: 12,
   borderRadius: 10,
@@ -142,13 +148,7 @@ export function ActivityChart({ series, metric, hasOrgs, stack }: Props) {
           <Tooltip
             cursor={{ fill: 'var(--color-grid)', fillOpacity: 0.45 }}
             formatter={(v) => [formatExact(Number(v)), name]}
-            contentStyle={{
-              fontSize: 12,
-              borderRadius: 10,
-              background: 'var(--color-surface)',
-              border: '1px solid var(--color-hairline)',
-              boxShadow: '0 4px 12px rgba(11,11,11,0.08)',
-            }}
+            contentStyle={TOOLTIP_SURFACE}
             labelStyle={{ color: 'var(--color-ink)', fontWeight: 600 }}
           />
           {/*
@@ -217,9 +217,10 @@ function StackedChart({ stack }: { stack: RepoStack }) {
             />
             {/*
               Declared largest-first, which Recharts stacks from the baseline up.
-              The rounded cap therefore belongs to the last bar declared; in a
-              bucket where that segment is zero the stack simply reads
-              flat-topped, which is cosmetic and accepted.
+              The rounded cap therefore belongs to the last bar declared; on the
+              real dataset that segment is zero in over a third of bars at
+              week/all-time, so the stack reads flat-topped there — a routine
+              outcome of the trade, not an edge case, and still accepted.
 
               A function dataKey, not a dotted path: repo names may contain dots,
               which Recharts would read as nesting.
