@@ -43,14 +43,3 @@ export function windowStartKey(
   if (keys.length <= count) return null
   return keys[keys.length - count] ?? null
 }
-
-/**
- * Generic over the point type: the total series and the per-repo series are
- * windowed against the same key, and only the sortable `key` is involved.
- */
-export function windowSeries<T extends { key: string }>(
-  series: readonly T[],
-  startKey: string | null,
-): T[] {
-  return startKey === null ? [...series] : series.filter((p) => p.key >= startKey)
-}

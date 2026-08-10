@@ -1,4 +1,6 @@
-import type { RepoPoint } from './aggregate'
+import { buildRepoSeries, type RepoPoint, type SeriesOptions } from './aggregate'
+import type { Dataset } from './types'
+import { windowSeries } from './window'
 
 /**
  * The catch-all segment. Safe as a field name beside repo ids: every repo id
@@ -65,4 +67,21 @@ export function foldToTopRepos(points: readonly RepoPoint[], limit: number): Rep
   })
 
   return { repos, hasOther, points: stackPoints }
+}
+
+/**
+ * Builds the per-repo stack for a dataset, in the one order that matters:
+ * aggregate the whole dataset, THEN window it, THEN rank. Ranking after
+ * windowing is what makes segments describe the visible range rather than
+ * the dataset as a whole — the reason this is a named function rather than
+ * three calls inlined at the call site is so that order is something a test
+ * can pin down instead of something only a diff's shape enforces.
+ */
+export function buildRepoStack(
+  ds: Dataset,
+  opts: SeriesOptions,
+  startKey: string | null,
+  limit: number,
+): RepoStack {
+  return foldToTopRepos(windowSeries(buildRepoSeries(ds, opts), startKey), limit)
 }

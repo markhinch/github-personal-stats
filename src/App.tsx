@@ -1,14 +1,15 @@
 import { useMemo, useState } from 'react'
-import { buildRepoSeries, buildSeries } from './core/aggregate'
+import { buildSeries } from './core/aggregate'
 import { listOrgs } from './core/orgs'
-import { foldToTopRepos } from './core/topRepos'
+import { buildRepoStack } from './core/topRepos'
 import type { Bucket, Metric, SeriesPoint, Split } from './core/types'
+import { windowSeries } from './core/window'
 import { ActivityChart } from './ui/ActivityChart'
 import { Controls } from './ui/Controls'
 import { StatTiles, type Tile } from './ui/StatTiles'
 import { formatExact, formatMetric, metricNoun } from './ui/format'
 import { MAX_SERIES } from './ui/palette'
-import { bucketsInRange, windowSeries, windowStartKey, type RangeId } from './ui/range'
+import { bucketsInRange, windowStartKey, type RangeId } from './ui/range'
 import { useDataset } from './ui/useDataset'
 
 const syncedOn = new Intl.DateTimeFormat('en-GB', {
@@ -52,13 +53,7 @@ export default function App() {
     // needs the unselected metric's split.
     const stack =
       split === 'repo'
-        ? foldToTopRepos(
-            windowSeries(
-              buildRepoSeries(state.dataset, { bucket, metric, orgs: selectedOrgs }),
-              start,
-            ),
-            MAX_SERIES,
-          )
+        ? buildRepoStack(state.dataset, { bucket, metric, orgs: selectedOrgs }, start, MAX_SERIES)
         : null
 
     return {

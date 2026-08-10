@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import type { RepoPoint } from './aggregate'
-import { OTHER_KEY, foldToTopRepos } from './topRepos'
+import type { RepoPoint, SeriesOptions } from './aggregate'
+import { OTHER_KEY, buildRepoStack, foldToTopRepos } from './topRepos'
+import type { Dataset } from './types'
 
 /** Builds one bucket from a repo -> value map. */
 const point = (key: string, byRepo: Record<string, number>): RepoPoint => ({
@@ -9,6 +10,15 @@ const point = (key: string, byRepo: Record<string, number>): RepoPoint => ({
   total: Object.values(byRepo).reduce((a, b) => a + b, 0),
   byRepo,
 })
+
+/** A dataset of commits only, from repos sharing the same org. */
+const commitDataset = (commits: Array<{ repo: string; authoredAt: string }>): Dataset => ({
+  commits: commits.map((c, i) => ({ sha: `sha-${i}`, ...c })),
+  mergedPrs: [],
+  meta: { syncedAt: '2026-08-31T00:00:00Z', rangeStart: '2026-01-01', rangeEnd: '2026-08-31' },
+})
+
+const monthlyCommits: SeriesOptions = { bucket: 'month', metric: 'commits', orgs: new Set(['o']) }
 
 describe('foldToTopRepos', () => {
   it('ranks repos by their total across the window, largest first', () => {
@@ -69,5 +79,39 @@ describe('foldToTopRepos', () => {
     expect(stack.repos).toEqual([])
     expect(stack.hasOther).toBe(false)
     expect(stack.points).toHaveLength(2)
+  })
+})
+
+describe('buildRepoStack', () => {
+  it('ranks on the windowed total, not the whole dataset — the order that makes the window meaningful', () => {
+    const ds = commitDataset([
+      // Dominates the dataset outright, but every commit predates the window.
+      ...Array.from({ length: 20 }, () => ({ repo: 'o/outside', authoredAt: '2026-01-05T00:00:00Z' })),
+      // The only activity the window contains.
+      { repo: 'o/inside', authoredAt: '2026-03-01T00:00:00Z' },
+    ])
+    // Window starts in February; the January burst falls outside it.
+    const stack = buildRepoStack(ds, monthlyCommits, '2026-02', 1)
+    expect(stack.repos).toEqual(['o/inside'])
+  })
+
+  it('windows before ranking, so a bucket before startKey is absent from the result', () => {
+    const ds = commitDataset([
+      { repo: 'o/a', authoredAt: '2026-01-05T00:00:00Z' },
+      { repo: 'o/a', authoredAt: '2026-03-05T00:00:00Z' },
+    ])
+    const stack = buildRepoStack(ds, monthlyCommits, '2026-02', 5)
+    // February is the window start though there was no activity in it —
+    // gap-filled, not skipped — and January is gone entirely.
+    expect(stack.points.map((p) => p.key)).toEqual(['2026-02', '2026-03'])
+  })
+
+  it('passes a null startKey through as an unbounded window', () => {
+    const ds = commitDataset([
+      { repo: 'o/a', authoredAt: '2026-01-05T00:00:00Z' },
+      { repo: 'o/a', authoredAt: '2026-03-05T00:00:00Z' },
+    ])
+    const stack = buildRepoStack(ds, monthlyCommits, null, 5)
+    expect(stack.points.map((p) => p.key)).toEqual(['2026-01', '2026-02', '2026-03'])
   })
 })
