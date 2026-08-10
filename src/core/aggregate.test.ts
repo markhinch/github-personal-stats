@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSeries } from './aggregate'
+import { buildRepoSeries, buildSeries } from './aggregate'
 import type { Dataset } from './types'
 
 const ds: Dataset = {
@@ -73,5 +73,56 @@ describe('buildSeries — lines', () => {
   it('respects org selection', () => {
     const s = buildSeries(ds, { bucket: 'month', metric: 'lines', orgs: new Set(['markhinch']) })
     expect(s).toEqual([{ key: '2026-05', label: 'May 2026', value: 6 }])
+  })
+})
+
+describe('buildRepoSeries', () => {
+  it('splits each bucket by repo', () => {
+    const s = buildRepoSeries(ds, { bucket: 'month', metric: 'commits', orgs: allOrgs })
+    expect(s.find((p) => p.key === '2026-05')?.byRepo).toEqual({
+      'Huub-NL/finview': 2,
+      'markhinch/zen': 1,
+    })
+  })
+
+  it('carries a total alongside the split', () => {
+    const s = buildRepoSeries(ds, { bucket: 'month', metric: 'commits', orgs: allOrgs })
+    expect(s.find((p) => p.key === '2026-05')?.total).toBe(3)
+  })
+
+  it('splits line churn by repo', () => {
+    const s = buildRepoSeries(ds, { bucket: 'month', metric: 'lines', orgs: allOrgs })
+    expect(s.find((p) => p.key === '2026-05')?.byRepo).toEqual({
+      'Huub-NL/finview': 120,
+      'markhinch/zen': 6,
+    })
+  })
+
+  it('gives empty buckets a zero total and no repos', () => {
+    const s = buildRepoSeries(ds, { bucket: 'month', metric: 'commits', orgs: allOrgs })
+    const june = s.find((p) => p.key === '2026-06')
+    expect(june?.total).toBe(0)
+    expect(june?.byRepo).toEqual({})
+  })
+
+  it('excludes repos whose org is deselected', () => {
+    const s = buildRepoSeries(ds, {
+      bucket: 'month', metric: 'commits', orgs: new Set(['Huub-NL']),
+    })
+    expect(s.find((p) => p.key === '2026-05')?.byRepo).toEqual({ 'Huub-NL/finview': 2 })
+  })
+
+  it('returns nothing when no org is selected', () => {
+    expect(buildRepoSeries(ds, { bucket: 'month', metric: 'commits', orgs: new Set() })).toEqual([])
+  })
+
+  // Guards the bucketKeysBetween extraction: if the shared walk changes
+  // behaviour, the two builders stop agreeing.
+  it.each(['commits', 'lines'] as const)('totals agree with buildSeries for %s', (metric) => {
+    for (const bucket of ['week', 'month'] as const) {
+      const flat = buildSeries(ds, { bucket, metric, orgs: allOrgs })
+      const split = buildRepoSeries(ds, { bucket, metric, orgs: allOrgs })
+      expect(split.map((p) => [p.key, p.total])).toEqual(flat.map((p) => [p.key, p.value]))
+    }
   })
 })
