@@ -3,8 +3,72 @@ import {
 } from 'recharts'
 import type { LabelListEntry } from 'recharts'
 import type { Metric, SeriesPoint } from '../core/types'
+import { breakdownRows, stackSegments, type RepoStack, type StackPoint } from '../core/topRepos'
 import { formatCompact, formatExact, formatMetricLabel } from './format'
 import { labelledIndices } from './labels'
+import { segmentColors } from './palette'
+import { ChartLegend } from './ChartLegend'
+
+/**
+ * Shared tooltip chrome for both chart modes: the total mode hands this to
+ * Recharts' `contentStyle`, the repo mode spreads it onto its own custom
+ * tooltip element. One const so the two never drift apart the way two
+ * hand-copied literals would.
+ */
+const TOOLTIP_SURFACE = {
+  fontSize: 12,
+  borderRadius: 10,
+  background: 'var(--color-surface)',
+  border: '1px solid var(--color-hairline)',
+  boxShadow: '0 4px 12px rgba(11,11,11,0.08)',
+} as const
+
+/**
+ * The per-bucket breakdown table. Alongside the legend, this is the relief the
+ * palette's light-mode contrast warning obliges — the numbers are readable
+ * without resolving a colour.
+ */
+function RepoTooltip(props: {
+  active?: boolean
+  payload?: ReadonlyArray<{ payload?: StackPoint }>
+  colors: Record<string, string>
+}) {
+  const point = props.payload?.[0]?.payload
+  if (props.active !== true || point === undefined) return null
+
+  const rows = breakdownRows(point.values)
+
+  return (
+    <div style={TOOLTIP_SURFACE} className="px-3 py-2">
+      <p className="font-semibold text-ink">{point.label}</p>
+      <table className="mt-1.5 w-full border-collapse">
+        <tbody>
+          {rows.map(([segment, value]) => (
+            <tr key={segment}>
+              <td className="py-0.5 pr-3">
+                <span className="flex items-center gap-1.5 text-ink-2">
+                  <span
+                    aria-hidden
+                    className="size-2 shrink-0 rounded-[2px]"
+                    style={{ background: props.colors[segment] }}
+                  />
+                  {segment}
+                </span>
+              </td>
+              <td className="py-0.5 text-right tabular-nums text-ink">{formatExact(value)}</td>
+            </tr>
+          ))}
+          <tr className="border-t border-hairline">
+            <td className="pt-1 pr-3 font-semibold text-ink">Total</td>
+            <td className="pt-1 text-right font-semibold tabular-nums text-ink">
+              {formatExact(point.total)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 interface Props {
   series: SeriesPoint[]
@@ -17,9 +81,14 @@ interface Props {
    * doesn't let them do.
    */
   hasOrgs: boolean
+  /**
+   * The per-repo split to draw, or null for a single-hue total bar. Ranked and
+   * bounded upstream — this component only draws what it is handed.
+   */
+  stack: RepoStack | null
 }
 
-export function ActivityChart({ series, metric, hasOrgs }: Props) {
+export function ActivityChart({ series, metric, hasOrgs, stack }: Props) {
   if (series.length === 0) {
     const message = hasOrgs
       ? 'Nothing to show — select at least one organisation.'
@@ -30,6 +99,8 @@ export function ActivityChart({ series, metric, hasOrgs }: Props) {
       </div>
     )
   }
+
+  if (stack !== null) return <StackedChart stack={stack} />
 
   const name = metric === 'commits' ? 'Commits' : 'Lines changed'
 
@@ -77,13 +148,7 @@ export function ActivityChart({ series, metric, hasOrgs }: Props) {
           <Tooltip
             cursor={{ fill: 'var(--color-grid)', fillOpacity: 0.45 }}
             formatter={(v) => [formatExact(Number(v)), name]}
-            contentStyle={{
-              fontSize: 12,
-              borderRadius: 10,
-              background: 'var(--color-surface)',
-              border: '1px solid var(--color-hairline)',
-              boxShadow: '0 4px 12px rgba(11,11,11,0.08)',
-            }}
+            contentStyle={TOOLTIP_SURFACE}
             labelStyle={{ color: 'var(--color-ink)', fontWeight: 600 }}
           />
           {/*
@@ -112,5 +177,73 @@ export function ActivityChart({ series, metric, hasOrgs }: Props) {
         </BarChart>
       </ResponsiveContainer>
     </div>
+  )
+}
+
+function StackedChart({ stack }: { stack: RepoStack }) {
+  const segments = stackSegments(stack)
+  const colors = segmentColors(stack.repos, stack.hasOther)
+
+  return (
+    <>
+      <div className="h-80 w-full">
+        <ResponsiveContainer>
+          {/*
+            No top margin for value labels: a stack has no single bar to anchor
+            them to, so the breakdown lives in the tooltip instead.
+          */}
+          <BarChart data={stack.points} margin={{ top: 8, right: 22, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke="var(--color-grid)" />
+            <XAxis
+              dataKey="label"
+              tick={{ fontSize: 11, fill: 'var(--color-muted)' }}
+              stroke="var(--color-baseline)"
+              tickLine={false}
+              tickMargin={8}
+              interval="preserveStartEnd"
+              minTickGap={12}
+            />
+            <YAxis
+              tick={{ fontSize: 11, fill: 'var(--color-muted)' }}
+              stroke="var(--color-grid)"
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v: number) => formatCompact(v)}
+              width={44}
+            />
+            <Tooltip
+              cursor={{ fill: 'var(--color-grid)', fillOpacity: 0.45 }}
+              content={<RepoTooltip colors={colors} />}
+            />
+            {/*
+              Declared largest-first, which Recharts stacks from the baseline up.
+              The rounded cap therefore belongs to the last bar declared; on the
+              real dataset that segment is zero in over a third of bars at
+              week/all-time, so the stack reads flat-topped there — a routine
+              outcome of the trade, not an edge case, and still accepted.
+
+              A function dataKey, not a dotted path: repo names may contain dots,
+              which Recharts would read as nesting.
+            */}
+            {segments.map((segment, i) => (
+              <Bar
+                key={segment}
+                dataKey={(p: StackPoint) => p.values[segment] ?? 0}
+                name={segment}
+                stackId="a"
+                fill={colors[segment]}
+                // A 2px surface gap between fills, per the mark specs.
+                stroke="var(--color-surface)"
+                strokeWidth={2}
+                radius={i === segments.length - 1 ? [4, 4, 0, 0] : undefined}
+                maxBarSize={24}
+                isAnimationActive={false}
+              />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <ChartLegend segments={segments} colors={colors} />
+    </>
   )
 }

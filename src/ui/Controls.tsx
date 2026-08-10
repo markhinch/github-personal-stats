@@ -1,16 +1,18 @@
 import type { ReactNode } from 'react'
-import type { Bucket, Metric } from '../core/types'
+import type { Bucket, Metric, Split } from '../core/types'
 import { RANGE_OPTIONS, type RangeId } from './range'
 
 interface Props {
   bucket: Bucket
   metric: Metric
   range: RangeId
+  split: Split
   orgs: string[]
   selectedOrgs: Set<string>
   onBucket: (b: Bucket) => void
   onMetric: (m: Metric) => void
   onRange: (r: RangeId) => void
+  onSplit: (s: Split) => void
   onToggleOrg: (org: string) => void
 }
 
@@ -104,6 +106,17 @@ export function Controls(p: Props) {
           options={[
             { value: 'week', label: 'Week' },
             { value: 'month', label: 'Month' },
+          ]}
+        />
+      </Field>
+
+      <Field label="Breakdown">
+        <Segmented<Split>
+          value={p.split}
+          onChange={p.onSplit}
+          options={[
+            { value: 'none', label: 'Total' },
+            { value: 'repo', label: 'By repo' },
           ]}
         />
       </Field>
