@@ -1,17 +1,21 @@
 import { describe, it, expect } from 'vitest'
 import type { SeriesPoint } from '../core/types'
-import { bucketsInRange, windowStartKey } from './range'
+import { RANGE_OPTIONS, bucketsInRange, windowStartKey } from './range'
 
 const months = (keys: string[]): SeriesPoint[] =>
   keys.map((key) => ({ key, label: key, value: 1 }))
 
 describe('bucketsInRange', () => {
   it('counts months directly', () => {
+    expect(bucketsInRange('3m', 'month')).toBe(3)
+    expect(bucketsInRange('6m', 'month')).toBe(6)
     expect(bucketsInRange('1y', 'month')).toBe(12)
     expect(bucketsInRange('2y', 'month')).toBe(24)
   })
 
   it('converts months to the weeks covering the same ground', () => {
+    expect(bucketsInRange('3m', 'week')).toBe(13)
+    expect(bucketsInRange('6m', 'week')).toBe(26)
     expect(bucketsInRange('1y', 'week')).toBe(52)
     expect(bucketsInRange('2y', 'week')).toBe(104)
   })
@@ -19,6 +23,20 @@ describe('bucketsInRange', () => {
   it('is unbounded for all time', () => {
     expect(bucketsInRange('all', 'month')).toBeNull()
     expect(bucketsInRange('all', 'week')).toBeNull()
+  })
+})
+
+describe('RANGE_OPTIONS', () => {
+  it('offers every range the type allows, shortest first', () => {
+    expect(RANGE_OPTIONS.map((o) => o.value)).toEqual(['3m', '6m', '1y', '2y', 'all'])
+  })
+
+  // The control renders straight from this list, so a range with no entry is
+  // unreachable in the UI even though the type says it exists.
+  it('gives every option a bucket count rule', () => {
+    for (const option of RANGE_OPTIONS) {
+      expect(bucketsInRange(option.value, 'month')).not.toBeUndefined()
+    }
   })
 })
 

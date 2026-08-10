@@ -1,15 +1,20 @@
 import type { Bucket, SeriesPoint } from '../core/types'
 
-export type RangeId = '1y' | '2y' | 'all'
+export type RangeId = '3m' | '6m' | '1y' | '2y' | 'all'
 
+/** Shortest first, so the row reads as one axis from recent to everything. */
 export const RANGE_OPTIONS: ReadonlyArray<{ value: RangeId; label: string }> = [
+  { value: '3m', label: '3 months' },
+  { value: '6m', label: '6 months' },
   { value: '1y', label: '1 year' },
   { value: '2y', label: '2 years' },
   { value: 'all', label: 'All time' },
 ]
 
 /** Months spanned by each range; null is unbounded. */
-const MONTHS: Record<RangeId, number | null> = { '1y': 12, '2y': 24, all: null }
+const MONTHS: Record<RangeId, number | null> = {
+  '3m': 3, '6m': 6, '1y': 12, '2y': 24, all: null,
+}
 
 const WEEKS_PER_MONTH = 365.25 / 12 / 7
 
