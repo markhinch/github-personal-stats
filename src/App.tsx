@@ -1,16 +1,18 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { buildSeries } from './core/aggregate'
 import { listOrgs } from './core/orgs'
 import { buildRepoStack } from './core/topRepos'
-import type { Bucket, Metric, SeriesPoint, Split } from './core/types'
+import type { SeriesPoint } from './core/types'
 import { windowSeries } from './core/window'
 import { ActivityChart } from './ui/ActivityChart'
 import { Controls } from './ui/Controls'
 import { StatTiles, type Tile } from './ui/StatTiles'
 import { formatExact, formatMetric, metricNoun } from './ui/format'
 import { MAX_SERIES } from './ui/palette'
-import { bucketsInRange, windowStartKey, type RangeId } from './ui/range'
+import type { Prefs } from './ui/prefs'
+import { bucketsInRange, windowStartKey } from './ui/range'
 import { useDataset } from './ui/useDataset'
+import { usePrefs } from './ui/usePrefs'
 
 const syncedOn = new Intl.DateTimeFormat('en-GB', {
   day: 'numeric', month: 'short', year: 'numeric',
@@ -23,11 +25,12 @@ const peakOf = (s: readonly SeriesPoint[]): SeriesPoint | null =>
 
 export default function App() {
   const state = useDataset()
-  const [bucket, setBucket] = useState<Bucket>('month')
-  const [metric, setMetric] = useState<Metric>('commits')
-  const [range, setRange] = useState<RangeId>('1y')
-  const [split, setSplit] = useState<Split>('none')
-  const [deselected, setDeselected] = useState<Set<string>>(new Set())
+  // Every control reads from, and writes back to, one persisted object, so a
+  // reload lands on the same view rather than on the defaults.
+  const [prefs, setPrefs] = usePrefs()
+  const { bucket, metric, range, split } = prefs
+
+  const update = (patch: Partial<Prefs>): void => setPrefs((prev) => ({ ...prev, ...patch }))
 
   const orgs = useMemo(
     () => (state.status === 'ready' ? listOrgs(state.dataset) : []),
@@ -35,8 +38,8 @@ export default function App() {
   )
   // Default to every org selected; track exclusions so newly-synced orgs appear.
   const selectedOrgs = useMemo(
-    () => new Set(orgs.filter((o) => !deselected.has(o))),
-    [orgs, deselected],
+    () => new Set(orgs.filter((o) => !prefs.deselectedOrgs.includes(o))),
+    [orgs, prefs.deselectedOrgs],
   )
 
   // Both metrics are built and windowed together: the tiles show commits *and*
@@ -80,12 +83,12 @@ export default function App() {
   }, [view, series])
 
   const toggleOrg = (org: string): void => {
-    setDeselected((prev) => {
-      const next = new Set(prev)
-      if (next.has(org)) next.delete(org)
-      else next.add(org)
-      return next
-    })
+    setPrefs((prev) => ({
+      ...prev,
+      deselectedOrgs: prev.deselectedOrgs.includes(org)
+        ? prev.deselectedOrgs.filter((o) => o !== org)
+        : [...prev.deselectedOrgs, org],
+    }))
   }
 
   const noun = metricNoun(metric)
@@ -170,10 +173,10 @@ export default function App() {
               split={split}
               orgs={orgs}
               selectedOrgs={selectedOrgs}
-              onBucket={setBucket}
-              onMetric={setMetric}
-              onRange={setRange}
-              onSplit={setSplit}
+              onBucket={(bucket) => update({ bucket })}
+              onMetric={(metric) => update({ metric })}
+              onRange={(range) => update({ range })}
+              onSplit={(split) => update({ split })}
               onToggleOrg={toggleOrg}
             />
 

@@ -37,7 +37,9 @@ pnpm dev
 - **`src/core/`** is pure, dependency-free bucketing and aggregation: ISO week/month
   keys, org derivation, gap-filled series.
 - **`src/ui/`** is a React SPA that loads `public/data.json` once and does all
-  filtering and bucketing in memory.
+  filtering and bucketing in memory. Whichever options are selected (metric, bucket,
+  breakdown, range, organisations) are kept in `localStorage`, so a reload comes back
+  to the same view.
 
 ## Data caveats
 
