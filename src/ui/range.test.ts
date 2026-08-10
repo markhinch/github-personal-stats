@@ -64,3 +64,20 @@ describe('windowSeries', () => {
     expect(windowSeries(s, '2026-W09').map((p) => p.key)).toEqual(['2026-W09', '2026-W10'])
   })
 })
+
+import type { RepoPoint } from '../core/aggregate'
+
+describe('windowSeries — repo points', () => {
+  const repoPoints = (keys: string[]): RepoPoint[] =>
+    keys.map((key) => ({ key, label: key, total: 1, byRepo: { 'o/x': 1 } }))
+
+  it('windows a per-repo series on the same key comparison', () => {
+    const s = repoPoints(['2026-01', '2026-02', '2026-03'])
+    expect(windowSeries(s, '2026-02').map((p) => p.key)).toEqual(['2026-02', '2026-03'])
+  })
+
+  it('preserves the per-repo split through the window', () => {
+    const s = repoPoints(['2026-01', '2026-02'])
+    expect(windowSeries(s, '2026-02')[0]?.byRepo).toEqual({ 'o/x': 1 })
+  })
+})
