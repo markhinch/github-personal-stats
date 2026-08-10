@@ -1,0 +1,68 @@
+import type { RepoPoint } from './aggregate'
+
+/**
+ * The catch-all segment. Safe as a field name beside repo ids: every repo id
+ * contains a "/" (see `isRepoId`), so no repo can ever collide with it.
+ */
+export const OTHER_KEY = 'Other'
+
+/** One bucket, reduced to the bounded set of segments a bar can actually show. */
+export interface StackPoint {
+  key: string
+  label: string
+  total: number
+  /** Repo id — or OTHER_KEY — to value. Every point carries the same fields. */
+  values: Record<string, number>
+}
+
+export interface RepoStack {
+  /** Stack order, largest first. At most `limit` entries. */
+  repos: string[]
+  /** Whether an Other segment is present. */
+  hasOther: boolean
+  points: StackPoint[]
+}
+
+/**
+ * Bounds a windowed per-repo series to the `limit` largest repos plus an Other
+ * segment, so a bar never asks for more colours than a categorical palette can
+ * distinguish.
+ *
+ * Ranking is over the points passed in — which are already windowed — so the
+ * segments describe what is on screen rather than the dataset as a whole. The
+ * cost is that a repo's colour is positional and can change between views; the
+ * legend sits under the plot in stack order to carry that.
+ */
+export function foldToTopRepos(points: readonly RepoPoint[], limit: number): RepoStack {
+  const totals = new Map<string, number>()
+  for (const p of points) {
+    for (const [repo, value] of Object.entries(p.byRepo)) {
+      totals.set(repo, (totals.get(repo) ?? 0) + value)
+    }
+  }
+
+  // Descending by total, then by id, so equal totals never reorder run to run.
+  const ranked = [...totals.keys()].sort((a, b) => {
+    const diff = totals.get(b)! - totals.get(a)!
+    return diff !== 0 ? diff : a.localeCompare(b)
+  })
+
+  const repos = ranked.slice(0, limit)
+  const hasOther = ranked.length > limit
+  const top = new Set(repos)
+
+  const stackPoints = points.map((p) => {
+    const values: Record<string, number> = {}
+    for (const repo of repos) values[repo] = p.byRepo[repo] ?? 0
+    if (hasOther) {
+      let other = 0
+      for (const [repo, value] of Object.entries(p.byRepo)) {
+        if (!top.has(repo)) other += value
+      }
+      values[OTHER_KEY] = other
+    }
+    return { key: p.key, label: p.label, total: p.total, values }
+  })
+
+  return { repos, hasOther, points: stackPoints }
+}
