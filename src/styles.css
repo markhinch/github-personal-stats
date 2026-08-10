@@ -21,8 +21,26 @@
   --color-baseline: #c3c2b7;
   --color-hairline: rgba(11, 11, 11, 0.1);
 
-  /* Categorical slot 1 (blue) — the bar fill. */
+  /*
+   * Categorical slots 1-5, from the dataviz reference palette. Validated as a
+   * set in both modes: worst adjacent CVD ΔE 9.1 light / 8.4 dark (>=8 target),
+   * worst adjacent normal-vision ΔE 19.6 light / 19.3 dark (>=15 floor).
+   *
+   * Slots 3, 4 and 5 fall below 3:1 against the light surface, so the relief
+   * rule applies — the chart legend and the per-repo tooltip are what discharge
+   * it, and neither is optional.
+   */
   --color-series-1: #2a78d6;
+  --color-series-2: #eb6834;
+  --color-series-3: #1baf7a;
+  --color-series-4: #eda100;
+  --color-series-5: #e87ba4;
+  /*
+   * "Other" is an absence of identity, not a sixth category, so it is a neutral
+   * outside the categorical palette and deliberately recessive. Stepped to stay
+   * visible without competing: 2.70:1 light, 3.24:1 dark.
+   */
+  --color-series-other: #9d9c8e;
   /*
    * Sequential blue step 500: one step darker than the mark, and the only one
    * of the two that clears WCAG's 4.5:1 floor for white UI text (5.39:1 in both
@@ -45,6 +63,11 @@
     --color-baseline: #383835;
     --color-hairline: rgba(255, 255, 255, 0.1);
     --color-series-1: #3987e5;
+    --color-series-2: #d95926;
+    --color-series-3: #199e70;
+    --color-series-4: #c98500;
+    --color-series-5: #d55181;
+    --color-series-other: #6b6b63;
     --color-accent: #256abf;
     --color-accent-wash: rgba(57, 135, 229, 0.18);
   }
