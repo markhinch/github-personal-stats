@@ -1,5 +1,5 @@
 import type { Bucket, Metric, Split } from '../core/types'
-import { RANGE_OPTIONS, type RangeId } from './range'
+import { RANGE_OPTIONS, supportsDayBucket, type RangeId } from './range'
 
 /** Every control on the page, in the shape it survives a reload in. */
 export interface Prefs {
@@ -60,10 +60,16 @@ export function parsePrefs(raw: string | null): Prefs {
   if (typeof json !== 'object' || json === null || Array.isArray(json)) return DEFAULT_PREFS
 
   const o = json as Record<string, unknown>
+  const range = oneOf(RANGES, o.range, DEFAULT_PREFS.range)
+  const bucket = oneOf(BUCKETS, o.bucket, DEFAULT_PREFS.bucket)
   return {
-    bucket: oneOf(BUCKETS, o.bucket, DEFAULT_PREFS.bucket),
+    // Individually valid, but the day bucket only makes sense for the
+    // ranges the control offers it for — a stale or hand-edited payload
+    // could still pair them, and Controls has no button to show as pressed
+    // for a mismatch like that.
+    bucket: bucket === 'day' && !supportsDayBucket(range) ? 'week' : bucket,
     metric: oneOf(METRICS, o.metric, DEFAULT_PREFS.metric),
-    range: oneOf(RANGES, o.range, DEFAULT_PREFS.range),
+    range,
     split: oneOf(SPLITS, o.split, DEFAULT_PREFS.split),
     deselectedOrgs: Array.isArray(o.deselectedOrgs)
       ? o.deselectedOrgs.filter((v): v is string => typeof v === 'string')

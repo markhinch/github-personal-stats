@@ -43,7 +43,3 @@ export function formatMetricLabel(metric: Metric, n: number): string {
 export function metricNoun(metric: Metric): string {
   return metric === 'commits' ? 'commits' : 'lines changed'
 }
-
-export function bucketNoun(bucket: 'week' | 'month', plural = false): string {
-  return plural ? `${bucket}s` : bucket
-}

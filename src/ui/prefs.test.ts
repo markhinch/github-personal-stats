@@ -87,8 +87,23 @@ describe('parsePrefs', () => {
     expect(parsePrefs(junk)).toEqual(DEFAULT_PREFS)
   })
 
-  it('accepts the day bucket', () => {
-    expect(parsePrefs('{"bucket":"day"}')).toEqual({ ...DEFAULT_PREFS, bucket: 'day' })
+  it('accepts the day bucket for a range that supports it', () => {
+    expect(parsePrefs('{"bucket":"day","range":"1w"}')).toEqual({
+      ...DEFAULT_PREFS,
+      bucket: 'day',
+      range: '1w',
+    })
+  })
+
+  // Individually each value is valid, but the day bucket only makes sense
+  // paired with a short range — the UI never offers this combination, but a
+  // stale or hand-edited payload could still contain it.
+  it('falls back the day bucket to week when paired with a range that does not support it', () => {
+    expect(parsePrefs('{"bucket":"day","range":"1y"}')).toEqual({
+      ...DEFAULT_PREFS,
+      bucket: 'week',
+      range: '1y',
+    })
   })
 
   it('drops non-string entries from the deselected orgs', () => {

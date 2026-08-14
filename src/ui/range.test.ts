@@ -31,6 +31,15 @@ describe('bucketsInRange', () => {
     expect(bucketsInRange('1m', 'month')).toBe(1)
   })
 
+  // A range shorter than one bucket rounds to zero buckets, and
+  // windowStartKey treats a count of 0 the same as the null "unbounded"
+  // sentinel (`keys[keys.length - 0]` is out of range) — so a 1-week range
+  // bucketed by month would silently show the entire dataset instead of
+  // nothing. Rounding up to 1 keeps the count meaningfully bounded.
+  it('never rounds down to zero buckets, even for a range shorter than the bucket', () => {
+    expect(bucketsInRange('1w', 'month')).toBe(1)
+  })
+
   it('is unbounded for all time', () => {
     expect(bucketsInRange('all', 'day')).toBeNull()
     expect(bucketsInRange('all', 'month')).toBeNull()

@@ -29,13 +29,18 @@ const DAYS: Record<RangeId, number | null> = {
 /**
  * How many buckets of the given size the range spans — 12 months, the 52
  * weeks, or the ~365 days that cover the same ground.
+ *
+ * Never rounds down to 0: a range shorter than one bucket (e.g. 1 week
+ * bucketed by month) still spans that single, partial bucket. 0 would be
+ * indistinguishable from unbounded to windowStartKey, which reads a null
+ * count as "show everything" — the opposite of what a short range asks for.
  */
 export function bucketsInRange(range: RangeId, bucket: Bucket): number | null {
   const days = DAYS[range]
   if (days === null) return null
-  if (bucket === 'day') return Math.round(days)
-  if (bucket === 'week') return Math.round(days / 7)
-  return Math.round(days / DAYS_PER_MONTH)
+  if (bucket === 'day') return Math.max(1, Math.round(days))
+  if (bucket === 'week') return Math.max(1, Math.round(days / 7))
+  return Math.max(1, Math.round(days / DAYS_PER_MONTH))
 }
 
 /** Ranges short enough that a day-by-day breakdown is still legible. */
