@@ -32,7 +32,7 @@ export const DEFAULT_PREFS: Prefs = {
  */
 export const PREFS_KEY = 'github-personal-stats:prefs:v1'
 
-const BUCKETS: readonly Bucket[] = ['week', 'month']
+const BUCKETS: readonly Bucket[] = ['day', 'week', 'month']
 const METRICS: readonly Metric[] = ['commits', 'lines']
 const SPLITS: readonly Split[] = ['none', 'repo']
 // Straight from the control's own option list, so a range the UI can't offer

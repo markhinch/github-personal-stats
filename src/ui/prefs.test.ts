@@ -78,13 +78,17 @@ describe('parsePrefs', () => {
 
   it('rejects values outside each control‘s option list', () => {
     const junk = JSON.stringify({
-      bucket: 'day',
+      bucket: 'year',
       metric: 'stars',
       range: '5y',
       split: 'author',
       deselectedOrgs: 'acme',
     })
     expect(parsePrefs(junk)).toEqual(DEFAULT_PREFS)
+  })
+
+  it('accepts the day bucket', () => {
+    expect(parsePrefs('{"bucket":"day"}')).toEqual({ ...DEFAULT_PREFS, bucket: 'day' })
   })
 
   it('drops non-string entries from the deselected orgs', () => {

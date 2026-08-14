@@ -29,7 +29,7 @@ export interface Dataset {
   meta: DatasetMeta
 }
 
-export type Bucket = 'week' | 'month'
+export type Bucket = 'day' | 'week' | 'month'
 export type Metric = 'commits' | 'lines'
 /** Whether bars are drawn as one total or split by repository. */
 export type Split = 'none' | 'repo'
