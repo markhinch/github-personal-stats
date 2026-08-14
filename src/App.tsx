@@ -10,7 +10,7 @@ import { StatTiles, type Tile } from './ui/StatTiles'
 import { formatExact, formatMetric, metricNoun } from './ui/format'
 import { MAX_SERIES } from './ui/palette'
 import type { Prefs } from './ui/prefs'
-import { bucketsInRange, windowStartKey } from './ui/range'
+import { bucketsInRange, nextBucket, windowStartKey } from './ui/range'
 import { useDataset } from './ui/useDataset'
 import { usePrefs } from './ui/usePrefs'
 
@@ -92,7 +92,7 @@ export default function App() {
   }
 
   const noun = metricNoun(metric)
-  const bucketWord = bucket === 'week' ? 'week' : 'month'
+  const bucketWord = bucket === 'day' ? 'day' : bucket === 'week' ? 'week' : 'month'
 
   const hero: Tile | null =
     stats === null
@@ -175,7 +175,7 @@ export default function App() {
               selectedOrgs={selectedOrgs}
               onBucket={(bucket) => update({ bucket })}
               onMetric={(metric) => update({ metric })}
-              onRange={(range) => update({ range })}
+              onRange={(range) => update({ range, bucket: nextBucket(range, bucket) })}
               onSplit={(split) => update({ split })}
               onToggleOrg={toggleOrg}
             />

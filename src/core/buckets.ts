@@ -57,6 +57,7 @@ export function isoWeekStart(d: LocalDate): LocalDate {
 const pad2 = (n: number): string => String(n).padStart(2, '0')
 
 export function bucketKeyOfLocalDate(d: LocalDate, bucket: Bucket): string {
+  if (bucket === 'day') return `${d.year}-${pad2(d.month)}-${pad2(d.day)}`
   if (bucket === 'month') return `${d.year}-${pad2(d.month)}`
   const { year, week } = isoWeek(d)
   return `${year}-W${pad2(week)}`
@@ -66,11 +67,17 @@ export function bucketKeyOf(iso: string, bucket: Bucket): string {
   return bucketKeyOfLocalDate(localDateOf(iso), bucket)
 }
 
+const DAY_KEY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
 const MONTH_KEY_RE = /^(\d{4})-(\d{2})$/
 const WEEK_KEY_RE = /^(\d{4})-W(\d{2})$/
 
 /** The first day of the bucket a key names. Inverse of bucketKeyOfLocalDate. */
 export function bucketStartOf(key: string, bucket: Bucket): LocalDate {
+  if (bucket === 'day') {
+    const m = DAY_KEY_RE.exec(key)
+    if (!m) throw new Error(`Malformed day key: ${JSON.stringify(key)}`)
+    return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) }
+  }
   if (bucket === 'month') {
     const m = MONTH_KEY_RE.exec(key)
     if (!m) throw new Error(`Malformed month key: ${JSON.stringify(key)}`)
@@ -88,6 +95,10 @@ export function bucketStartOf(key: string, bucket: Bucket): LocalDate {
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 export function bucketLabelOf(key: string, bucket: Bucket): string {
+  if (bucket === 'day') {
+    const start = bucketStartOf(key, 'day')
+    return `${start.day} ${MONTH_NAMES[start.month - 1]} ${start.year}`
+  }
   if (bucket === 'month') {
     const start = bucketStartOf(key, 'month')
     return `${MONTH_NAMES[start.month - 1]} ${start.year}`

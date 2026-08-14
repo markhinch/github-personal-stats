@@ -88,6 +88,11 @@ describe('isoWeekStart', () => {
 })
 
 describe('bucketKeyOf', () => {
+  it('builds zero-padded, sortable day keys', () => {
+    expect(bucketKeyOf('2026-07-05T16:05:11.000+02:00', 'day')).toBe('2026-07-05')
+    expect(bucketKeyOf('2026-01-31T10:00:00.000+01:00', 'day')).toBe('2026-01-31')
+  })
+
   it('builds zero-padded, sortable month keys', () => {
     expect(bucketKeyOf('2026-07-22T16:05:11.000+02:00', 'month')).toBe('2026-07')
     expect(bucketKeyOf('2026-01-05T10:00:00.000+01:00', 'month')).toBe('2026-01')
@@ -121,6 +126,10 @@ describe('bucketKeyOf', () => {
 })
 
 describe('bucketStartOf', () => {
+  it('round-trips a day key', () => {
+    expect(bucketStartOf('2026-07-05', 'day')).toEqual({ year: 2026, month: 7, day: 5 })
+  })
+
   it('round-trips a month key', () => {
     expect(bucketStartOf('2026-07', 'month')).toEqual({ year: 2026, month: 7, day: 1 })
   })
@@ -142,10 +151,15 @@ describe('bucketStartOf', () => {
   it('throws on a malformed key', () => {
     expect(() => bucketStartOf('nope', 'month')).toThrow(/malformed/i)
   })
+
+  it('throws on a malformed day key', () => {
+    expect(() => bucketStartOf('nope', 'day')).toThrow(/malformed/i)
+  })
 })
 
 describe('bucketLabelOf', () => {
-  it('labels months and weeks readably', () => {
+  it('labels days, months and weeks readably', () => {
+    expect(bucketLabelOf('2026-07-05', 'day')).toBe('5 Jul 2026')
     expect(bucketLabelOf('2026-07', 'month')).toBe('Jul 2026')
     expect(bucketLabelOf('2026-W30', 'week')).toBe('W30 2026')
   })

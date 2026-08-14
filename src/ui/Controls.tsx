@@ -1,6 +1,12 @@
 import type { ReactNode } from 'react'
 import type { Bucket, Metric, Split } from '../core/types'
-import { RANGE_OPTIONS, type RangeId } from './range'
+import { RANGE_OPTIONS, supportsDayBucket, type RangeId } from './range'
+
+const BUCKET_OPTIONS: ReadonlyArray<{ value: Bucket; label: string }> = [
+  { value: 'week', label: 'Week' },
+  { value: 'month', label: 'Month' },
+]
+const DAY_OPTION = { value: 'day' as const, label: 'Day' }
 
 interface Props {
   bucket: Bucket
@@ -103,10 +109,7 @@ export function Controls(p: Props) {
         <Segmented<Bucket>
           value={p.bucket}
           onChange={p.onBucket}
-          options={[
-            { value: 'week', label: 'Week' },
-            { value: 'month', label: 'Month' },
-          ]}
+          options={supportsDayBucket(p.range) ? [DAY_OPTION, ...BUCKET_OPTIONS] : BUCKET_OPTIONS}
         />
       </Field>
 
