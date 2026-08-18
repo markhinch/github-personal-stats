@@ -195,6 +195,7 @@ export default function App() {
                 <ActivityChart
                   series={series}
                   metric={metric}
+                  bucket={bucket}
                   hasOrgs={orgs.length > 0}
                   stack={view?.stack ?? null}
                   lineBreakdown={view?.lineBreakdown ?? null}

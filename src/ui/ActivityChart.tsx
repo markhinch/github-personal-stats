@@ -1,8 +1,8 @@
 import {
-  Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import type { LabelListEntry } from 'recharts'
-import type { LinesPoint, Metric, SeriesPoint } from '../core/types'
+import type { Bucket, LinesPoint, Metric, SeriesPoint } from '../core/types'
 import { breakdownRows, stackSegments, type RepoStack, type StackPoint } from '../core/topRepos'
 import { formatCompact, formatExact, formatMetricLabel } from './format'
 import { labelledIndices } from './labels'
@@ -23,6 +23,25 @@ const TOOLTIP_SURFACE = {
   boxShadow: '0 4px 12px rgba(11,11,11,0.08)',
 } as const
 
+/** A colour-preserving diagonal hatch used only for the unfinished final bar. */
+function ProgressPattern(props: { id: string; color: string }) {
+  return (
+    <pattern id={props.id} width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill={props.color} />
+      <path
+        d="M-2 2L2-2M0 8L8 0M6 10L10 6"
+        fill="none"
+        stroke="var(--color-ink)"
+        strokeOpacity={0.24}
+        strokeWidth={1.5}
+      />
+    </pattern>
+  )
+}
+
+const progressLabel = (label: string, finalLabel: string | undefined, inProgress: boolean): string =>
+  inProgress && label === finalLabel ? `${label} · so far` : label
+
 /**
  * The per-bucket breakdown table. Alongside the legend, this is the relief the
  * palette's light-mode contrast warning obliges — the numbers are readable
@@ -32,6 +51,7 @@ function BreakdownTooltip(props: {
   active?: boolean
   payload?: ReadonlyArray<{ payload?: StackPoint }>
   colors: Record<string, string>
+  inProgressKey?: string
 }) {
   const point = props.payload?.[0]?.payload
   if (props.active !== true || point === undefined) return null
@@ -40,7 +60,12 @@ function BreakdownTooltip(props: {
 
   return (
     <div style={TOOLTIP_SURFACE} className="px-3 py-2">
-      <p className="font-semibold text-ink">{point.label}</p>
+      <p className="font-semibold text-ink">
+        {point.label}
+        {point.key === props.inProgressKey && (
+          <span className="font-normal text-muted"> · In progress</span>
+        )}
+      </p>
       <table className="mt-1.5 w-full border-collapse">
         <tbody>
           {rows.map(([segment, value]) => (
@@ -73,6 +98,7 @@ function BreakdownTooltip(props: {
 interface Props {
   series: SeriesPoint[]
   metric: Metric
+  bucket: Bucket
   /**
    * Whether the dataset has any orgs at all. Distinguishes "you deselected
    * everything" (actionable: select one) from "there is nothing to select"
@@ -90,7 +116,7 @@ interface Props {
   lineBreakdown: LinesPoint[] | null
 }
 
-export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }: Props) {
+export function ActivityChart({ series, metric, bucket, hasOrgs, stack, lineBreakdown }: Props) {
   if (series.length === 0) {
     const message = hasOrgs
       ? 'Nothing to show — select at least one organisation.'
@@ -101,6 +127,8 @@ export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }:
       </div>
     )
   }
+
+  const showProgress = bucket !== 'day'
 
   if (lineBreakdown !== null) {
     const segments = ['Lines added', 'Lines removed']
@@ -117,7 +145,14 @@ export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }:
         'Lines removed': point.deletions,
       },
     }))
-    return <StackedChart points={points} segments={segments} colors={colors} />
+    return (
+      <StackedChart
+        points={points}
+        segments={segments}
+        colors={colors}
+        showProgress={showProgress}
+      />
+    )
   }
 
   if (stack !== null) {
@@ -127,11 +162,14 @@ export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }:
         points={stack.points}
         segments={segments}
         colors={segmentColors(stack.repos, stack.hasOther)}
+        showProgress={showProgress}
       />
     )
   }
 
   const name = metric === 'commits' ? 'Commits' : 'Lines changed'
+  const finalLabel = series.at(-1)?.label
+  const progressPatternId = 'activity-progress-total'
 
   // Keyed by bucket, not by position: Recharts omits zero-height bars from the
   // label list, so its label index counts *rendered bars* and drifts from the
@@ -154,6 +192,11 @@ export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }:
           margin keeps the last bar's label from being clipped by the plot edge.
         */}
         <BarChart data={series} margin={{ top: 24, right: 22, bottom: 0, left: 0 }}>
+          {showProgress && (
+            <defs>
+              <ProgressPattern id={progressPatternId} color="var(--color-series-1)" />
+            </defs>
+          )}
           <CartesianGrid vertical={false} stroke="var(--color-grid)" />
           <XAxis
             dataKey="label"
@@ -165,6 +208,7 @@ export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }:
             // Small enough that a 12-month view labels every month; wide views
             // still thin their ticks, since the labels simply cannot all fit.
             minTickGap={12}
+            tickFormatter={(label: string) => progressLabel(label, finalLabel, showProgress)}
           />
           <YAxis
             tick={{ fontSize: 11, fill: 'var(--color-muted)' }}
@@ -177,6 +221,7 @@ export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }:
           <Tooltip
             cursor={{ fill: 'var(--color-grid)', fillOpacity: 0.45 }}
             formatter={(v) => [formatExact(Number(v)), name]}
+            labelFormatter={(label) => progressLabel(String(label), finalLabel, showProgress)}
             contentStyle={TOOLTIP_SURFACE}
             labelStyle={{ color: 'var(--color-ink)', fontWeight: 600 }}
           />
@@ -193,6 +238,16 @@ export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }:
             maxBarSize={24}
             isAnimationActive={false}
           >
+            {series.map((point, index) => (
+              <Cell
+                key={point.key}
+                fill={
+                  showProgress && index === series.length - 1
+                    ? `url(#${progressPatternId})`
+                    : 'var(--color-series-1)'
+                }
+              />
+            ))}
             {/* Text wears an ink token, never the mark's blue. */}
             <LabelList
               valueAccessor={valueLabel}
@@ -213,7 +268,10 @@ function StackedChart(props: {
   points: StackPoint[]
   segments: string[]
   colors: Record<string, string>
+  showProgress: boolean
 }) {
+  const finalPoint = props.points.at(-1)
+
   return (
     <>
       <div className="h-80 w-full">
@@ -223,6 +281,17 @@ function StackedChart(props: {
             them to, so the breakdown lives in the tooltip instead.
           */}
           <BarChart data={props.points} margin={{ top: 8, right: 22, bottom: 0, left: 0 }}>
+            {props.showProgress && (
+              <defs>
+                {props.segments.map((segment, index) => (
+                  <ProgressPattern
+                    key={segment}
+                    id={`activity-progress-stack-${index}`}
+                    color={props.colors[segment]!}
+                  />
+                ))}
+              </defs>
+            )}
             <CartesianGrid vertical={false} stroke="var(--color-grid)" />
             <XAxis
               dataKey="label"
@@ -232,6 +301,9 @@ function StackedChart(props: {
               tickMargin={8}
               interval="preserveStartEnd"
               minTickGap={12}
+              tickFormatter={(label: string) =>
+                progressLabel(label, finalPoint?.label, props.showProgress)
+              }
             />
             <YAxis
               tick={{ fontSize: 11, fill: 'var(--color-muted)' }}
@@ -243,7 +315,12 @@ function StackedChart(props: {
             />
             <Tooltip
               cursor={{ fill: 'var(--color-grid)', fillOpacity: 0.45 }}
-              content={<BreakdownTooltip colors={props.colors} />}
+              content={
+                <BreakdownTooltip
+                  colors={props.colors}
+                  inProgressKey={props.showProgress ? finalPoint?.key : undefined}
+                />
+              }
             />
             {/*
               Recharts stacks segments from the baseline in declaration order.
@@ -266,7 +343,18 @@ function StackedChart(props: {
                 radius={i === props.segments.length - 1 ? [4, 4, 0, 0] : undefined}
                 maxBarSize={24}
                 isAnimationActive={false}
-              />
+              >
+                {props.points.map((point, pointIndex) => (
+                  <Cell
+                    key={point.key}
+                    fill={
+                      props.showProgress && pointIndex === props.points.length - 1
+                        ? `url(#activity-progress-stack-${i})`
+                        : props.colors[segment]
+                    }
+                  />
+                ))}
+              </Bar>
             ))}
           </BarChart>
         </ResponsiveContainer>
