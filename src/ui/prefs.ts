@@ -34,7 +34,7 @@ export const PREFS_KEY = 'github-personal-stats:prefs:v1'
 
 const BUCKETS: readonly Bucket[] = ['day', 'week', 'month']
 const METRICS: readonly Metric[] = ['commits', 'lines']
-const SPLITS: readonly Split[] = ['none', 'repo']
+const SPLITS: readonly Split[] = ['none', 'repo', 'lines']
 // Straight from the control's own option list, so a range the UI can't offer
 // can't be restored either.
 const RANGES: readonly RangeId[] = RANGE_OPTIONS.map((o) => o.value)
@@ -62,18 +62,31 @@ export function parsePrefs(raw: string | null): Prefs {
   const o = json as Record<string, unknown>
   const range = oneOf(RANGES, o.range, DEFAULT_PREFS.range)
   const bucket = oneOf(BUCKETS, o.bucket, DEFAULT_PREFS.bucket)
+  const metric = oneOf(METRICS, o.metric, DEFAULT_PREFS.metric)
+  const split = oneOf(SPLITS, o.split, DEFAULT_PREFS.split)
   return {
     // Individually valid, but the day bucket only makes sense for the
     // ranges the control offers it for — a stale or hand-edited payload
     // could still pair them, and Controls has no button to show as pressed
     // for a mismatch like that.
     bucket: bucket === 'day' && !supportsDayBucket(range) ? 'week' : bucket,
-    metric: oneOf(METRICS, o.metric, DEFAULT_PREFS.metric),
+    metric,
     range,
-    split: oneOf(SPLITS, o.split, DEFAULT_PREFS.split),
+    // The Lines option is not offered for Commits. Normalize hand-edited or
+    // stale storage to the same state produced by the live controls.
+    split: metric === 'commits' && split === 'lines' ? 'none' : split,
     deselectedOrgs: Array.isArray(o.deselectedOrgs)
       ? o.deselectedOrgs.filter((v): v is string => typeof v === 'string')
       : DEFAULT_PREFS.deselectedOrgs,
+  }
+}
+
+/** Applies a Metric control change while keeping its dependent Breakdown valid. */
+export function withMetric(prefs: Prefs, metric: Metric): Prefs {
+  return {
+    ...prefs,
+    metric,
+    split: metric === 'commits' && prefs.split === 'lines' ? 'none' : prefs.split,
   }
 }
 

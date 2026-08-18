@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { buildSeries } from './core/aggregate'
+import { buildLinesSeries, buildSeries } from './core/aggregate'
 import { listOrgs } from './core/orgs'
 import { buildRepoStack } from './core/topRepos'
 import type { SeriesPoint } from './core/types'
@@ -9,7 +9,7 @@ import { Controls } from './ui/Controls'
 import { StatTiles, type Tile } from './ui/StatTiles'
 import { formatExact, formatMetric, metricNoun } from './ui/format'
 import { MAX_SERIES } from './ui/palette'
-import type { Prefs } from './ui/prefs'
+import { withMetric, type Prefs } from './ui/prefs'
 import { bucketsInRange, nextBucket, windowStartKey } from './ui/range'
 import { useDataset } from './ui/useDataset'
 import { usePrefs } from './ui/usePrefs'
@@ -58,11 +58,16 @@ export default function App() {
       split === 'repo'
         ? buildRepoStack(state.dataset, { bucket, metric, orgs: selectedOrgs }, start, MAX_SERIES)
         : null
+    const lineBreakdown =
+      split === 'lines'
+        ? windowSeries(buildLinesSeries(state.dataset, { bucket, orgs: selectedOrgs }), start)
+        : null
 
     return {
       commits: windowSeries(commits, start),
       lines: windowSeries(lines, start),
       stack,
+      lineBreakdown,
     }
   }, [state, bucket, metric, range, selectedOrgs, split])
 
@@ -174,7 +179,7 @@ export default function App() {
               orgs={orgs}
               selectedOrgs={selectedOrgs}
               onBucket={(bucket) => update({ bucket })}
-              onMetric={(metric) => update({ metric })}
+              onMetric={(metric) => setPrefs((prev) => withMetric(prev, metric))}
               onRange={(range) => update({ range, bucket: nextBucket(range, bucket) })}
               onSplit={(split) => update({ split })}
               onToggleOrg={toggleOrg}
@@ -192,6 +197,7 @@ export default function App() {
                   metric={metric}
                   hasOrgs={orgs.length > 0}
                   stack={view?.stack ?? null}
+                  lineBreakdown={view?.lineBreakdown ?? null}
                 />
               </div>
             </div>

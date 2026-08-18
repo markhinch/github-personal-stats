@@ -31,8 +31,8 @@ export interface Dataset {
 
 export type Bucket = 'day' | 'week' | 'month'
 export type Metric = 'commits' | 'lines'
-/** Whether bars are drawn as one total or split by repository. */
-export type Split = 'none' | 'repo'
+/** Whether bars are drawn as one total, split by repository, or by line direction. */
+export type Split = 'none' | 'repo' | 'lines'
 
 /** A timezone-free calendar date. Month is 1-12, day is 1-31. */
 export interface LocalDate {
@@ -47,4 +47,16 @@ export interface SeriesPoint {
   /** Human label, e.g. "W31 2026" or "Jul 2026". */
   label: string
   value: number
+}
+
+/** One bucket of line churn, retaining additions and deletions separately. */
+export interface LinesPoint {
+  /** Sortable bucket identity, e.g. "2026-W31" or "2026-07". */
+  key: string
+  /** Human label, e.g. "W31 2026" or "Jul 2026". */
+  label: string
+  additions: number
+  deletions: number
+  /** Additions + deletions, matching the Lines changed metric. */
+  total: number
 }

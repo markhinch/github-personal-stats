@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildRepoSeries, buildSeries } from './aggregate'
+import { buildLinesSeries, buildRepoSeries, buildSeries } from './aggregate'
 import type { Dataset } from './types'
 
 const ds: Dataset = {
@@ -73,6 +73,47 @@ describe('buildSeries — lines', () => {
   it('respects org selection', () => {
     const s = buildSeries(ds, { bucket: 'month', metric: 'lines', orgs: new Set(['markhinch']) })
     expect(s).toEqual([{ key: '2026-05', label: 'May 2026', value: 6 }])
+  })
+})
+
+describe('buildLinesSeries', () => {
+  it('keeps additions and deletions separate while carrying their total', () => {
+    const s = buildLinesSeries(ds, { bucket: 'month', orgs: allOrgs })
+    expect(s).toEqual([
+      {
+        key: '2026-05',
+        label: 'May 2026',
+        additions: 105,
+        deletions: 21,
+        total: 126,
+      },
+    ])
+  })
+
+  it('filters organisations and gap-fills buckets', () => {
+    const withGap: Dataset = {
+      ...ds,
+      mergedPrs: [
+        ...ds.mergedPrs,
+        { repo: 'markhinch/zen', mergedAt: '2026-07-06T12:00:00Z', additions: 3, deletions: 2 },
+      ],
+    }
+    const s = buildLinesSeries(withGap, { bucket: 'month', orgs: new Set(['markhinch']) })
+    expect(s.map((p) => [p.key, p.additions, p.deletions, p.total])).toEqual([
+      ['2026-05', 5, 1, 6],
+      ['2026-06', 0, 0, 0],
+      ['2026-07', 3, 2, 5],
+    ])
+  })
+
+  it('returns an empty series when no organisation is selected', () => {
+    expect(buildLinesSeries(ds, { bucket: 'month', orgs: new Set() })).toEqual([])
+  })
+
+  it.each(['week', 'month'] as const)('totals match Lines changed for the %s bucket', (bucket) => {
+    const split = buildLinesSeries(ds, { bucket, orgs: allOrgs })
+    const total = buildSeries(ds, { bucket, metric: 'lines', orgs: allOrgs })
+    expect(split.map((p) => [p.key, p.total])).toEqual(total.map((p) => [p.key, p.value]))
   })
 })
 

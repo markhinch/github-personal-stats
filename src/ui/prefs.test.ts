@@ -5,6 +5,7 @@ import {
   parsePrefs,
   readPrefs,
   serializePrefs,
+  withMetric,
   writePrefs,
   type PrefStore,
   type Prefs,
@@ -95,6 +96,18 @@ describe('parsePrefs', () => {
     })
   })
 
+  it('restores the Lines breakdown with the Lines changed metric', () => {
+    expect(parsePrefs('{"metric":"lines","split":"lines"}')).toEqual({
+      ...DEFAULT_PREFS,
+      metric: 'lines',
+      split: 'lines',
+    })
+  })
+
+  it('normalizes a Lines breakdown paired with Commits', () => {
+    expect(parsePrefs('{"metric":"commits","split":"lines"}')).toEqual(DEFAULT_PREFS)
+  })
+
   // Individually each value is valid, but the day bucket only makes sense
   // paired with a short range — the UI never offers this combination, but a
   // stale or hand-edited payload could still contain it.
@@ -111,6 +124,20 @@ describe('parsePrefs', () => {
       'acme',
       'globex',
     ])
+  })
+})
+
+describe('withMetric', () => {
+  it('resets the Lines breakdown to Total when changing to Commits', () => {
+    expect(withMetric({ ...nonDefault, split: 'lines' }, 'commits')).toEqual({
+      ...nonDefault,
+      metric: 'commits',
+      split: 'none',
+    })
+  })
+
+  it('preserves breakdowns that are valid for both metrics', () => {
+    expect(withMetric(nonDefault, 'commits')).toEqual({ ...nonDefault, metric: 'commits' })
   })
 })
 

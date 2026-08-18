@@ -2,7 +2,7 @@ import {
   Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import type { LabelListEntry } from 'recharts'
-import type { Metric, SeriesPoint } from '../core/types'
+import type { LinesPoint, Metric, SeriesPoint } from '../core/types'
 import { breakdownRows, stackSegments, type RepoStack, type StackPoint } from '../core/topRepos'
 import { formatCompact, formatExact, formatMetricLabel } from './format'
 import { labelledIndices } from './labels'
@@ -10,8 +10,8 @@ import { segmentColors } from './palette'
 import { ChartLegend } from './ChartLegend'
 
 /**
- * Shared tooltip chrome for both chart modes: the total mode hands this to
- * Recharts' `contentStyle`, the repo mode spreads it onto its own custom
+ * Shared tooltip chrome for every chart mode: the total mode hands this to
+ * Recharts' `contentStyle`, the breakdown modes spread it onto their custom
  * tooltip element. One const so the two never drift apart the way two
  * hand-copied literals would.
  */
@@ -28,7 +28,7 @@ const TOOLTIP_SURFACE = {
  * palette's light-mode contrast warning obliges — the numbers are readable
  * without resolving a colour.
  */
-function RepoTooltip(props: {
+function BreakdownTooltip(props: {
   active?: boolean
   payload?: ReadonlyArray<{ payload?: StackPoint }>
   colors: Record<string, string>
@@ -86,9 +86,11 @@ interface Props {
    * bounded upstream — this component only draws what it is handed.
    */
   stack: RepoStack | null
+  /** Additions/deletions for the Lines breakdown, or null for another mode. */
+  lineBreakdown: LinesPoint[] | null
 }
 
-export function ActivityChart({ series, metric, hasOrgs, stack }: Props) {
+export function ActivityChart({ series, metric, hasOrgs, stack, lineBreakdown }: Props) {
   if (series.length === 0) {
     const message = hasOrgs
       ? 'Nothing to show — select at least one organisation.'
@@ -100,7 +102,34 @@ export function ActivityChart({ series, metric, hasOrgs, stack }: Props) {
     )
   }
 
-  if (stack !== null) return <StackedChart stack={stack} />
+  if (lineBreakdown !== null) {
+    const segments = ['Lines added', 'Lines removed']
+    const colors = {
+      'Lines added': 'var(--color-lines-added)',
+      'Lines removed': 'var(--color-lines-removed)',
+    }
+    const points: StackPoint[] = lineBreakdown.map((point) => ({
+      key: point.key,
+      label: point.label,
+      total: point.total,
+      values: {
+        'Lines added': point.additions,
+        'Lines removed': point.deletions,
+      },
+    }))
+    return <StackedChart points={points} segments={segments} colors={colors} />
+  }
+
+  if (stack !== null) {
+    const segments = stackSegments(stack)
+    return (
+      <StackedChart
+        points={stack.points}
+        segments={segments}
+        colors={segmentColors(stack.repos, stack.hasOther)}
+      />
+    )
+  }
 
   const name = metric === 'commits' ? 'Commits' : 'Lines changed'
 
@@ -180,10 +209,11 @@ export function ActivityChart({ series, metric, hasOrgs, stack }: Props) {
   )
 }
 
-function StackedChart({ stack }: { stack: RepoStack }) {
-  const segments = stackSegments(stack)
-  const colors = segmentColors(stack.repos, stack.hasOther)
-
+function StackedChart(props: {
+  points: StackPoint[]
+  segments: string[]
+  colors: Record<string, string>
+}) {
   return (
     <>
       <div className="h-80 w-full">
@@ -192,7 +222,7 @@ function StackedChart({ stack }: { stack: RepoStack }) {
             No top margin for value labels: a stack has no single bar to anchor
             them to, so the breakdown lives in the tooltip instead.
           */}
-          <BarChart data={stack.points} margin={{ top: 8, right: 22, bottom: 0, left: 0 }}>
+          <BarChart data={props.points} margin={{ top: 8, right: 22, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke="var(--color-grid)" />
             <XAxis
               dataKey="label"
@@ -213,29 +243,27 @@ function StackedChart({ stack }: { stack: RepoStack }) {
             />
             <Tooltip
               cursor={{ fill: 'var(--color-grid)', fillOpacity: 0.45 }}
-              content={<RepoTooltip colors={colors} />}
+              content={<BreakdownTooltip colors={props.colors} />}
             />
             {/*
-              Declared largest-first, which Recharts stacks from the baseline up.
-              The rounded cap therefore belongs to the last bar declared; on the
-              real dataset that segment is zero in over a third of bars at
-              week/all-time, so the stack reads flat-topped there — a routine
-              outcome of the trade, not an edge case, and still accepted.
+              Recharts stacks segments from the baseline in declaration order.
+              The rounded cap belongs to the final segment; when that segment is
+              zero, the visible stack is intentionally flat-topped.
 
               A function dataKey, not a dotted path: repo names may contain dots,
               which Recharts would read as nesting.
             */}
-            {segments.map((segment, i) => (
+            {props.segments.map((segment, i) => (
               <Bar
                 key={segment}
                 dataKey={(p: StackPoint) => p.values[segment] ?? 0}
                 name={segment}
                 stackId="a"
-                fill={colors[segment]}
+                fill={props.colors[segment]}
                 // A 2px surface gap between fills, per the mark specs.
                 stroke="var(--color-surface)"
                 strokeWidth={2}
-                radius={i === segments.length - 1 ? [4, 4, 0, 0] : undefined}
+                radius={i === props.segments.length - 1 ? [4, 4, 0, 0] : undefined}
                 maxBarSize={24}
                 isAnimationActive={false}
               />
@@ -243,7 +271,7 @@ function StackedChart({ stack }: { stack: RepoStack }) {
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <ChartLegend segments={segments} colors={colors} />
+      <ChartLegend segments={props.segments} colors={props.colors} />
     </>
   )
 }

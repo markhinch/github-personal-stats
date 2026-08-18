@@ -1,4 +1,4 @@
-import type { Bucket, Dataset, Metric, SeriesPoint } from './types'
+import type { Bucket, Dataset, LinesPoint, Metric, SeriesPoint } from './types'
 import { orgOf } from './orgs'
 import {
   bucketKeyOf, bucketKeyOfLocalDate, bucketLabelOf, bucketStartOf,
@@ -65,6 +65,42 @@ export function buildSeries(ds: Dataset, opts: SeriesOptions): SeriesPoint[] {
     label: bucketLabelOf(key, bucket),
     value: totals.get(key) ?? 0,
   }))
+}
+
+/**
+ * Aggregates line churn while retaining its two components. The bucket extent
+ * and gap filling deliberately match `buildSeries`, so changing breakdown does
+ * not move or remove bars from the chart.
+ */
+export function buildLinesSeries(
+  ds: Dataset,
+  opts: Pick<SeriesOptions, 'bucket' | 'orgs'>,
+): LinesPoint[] {
+  const { bucket, orgs } = opts
+  const totals = new Map<string, { additions: number; deletions: number }>()
+
+  for (const pr of ds.mergedPrs) {
+    if (!orgs.has(orgOf(pr.repo))) continue
+    const key = bucketKeyOf(pr.mergedAt, bucket)
+    const point = totals.get(key) ?? { additions: 0, deletions: 0 }
+    point.additions += pr.additions
+    point.deletions += pr.deletions
+    totals.set(key, point)
+  }
+
+  if (totals.size === 0) return []
+
+  const keys = [...totals.keys()].sort()
+  return bucketKeysBetween(keys[0]!, keys[keys.length - 1]!, bucket).map((key) => {
+    const point = totals.get(key) ?? { additions: 0, deletions: 0 }
+    return {
+      key,
+      label: bucketLabelOf(key, bucket),
+      additions: point.additions,
+      deletions: point.deletions,
+      total: point.additions + point.deletions,
+    }
+  })
 }
 
 /** One bucket of activity, split by the repositories that made it up. */

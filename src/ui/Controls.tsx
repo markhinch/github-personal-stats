@@ -120,6 +120,7 @@ export function Controls(p: Props) {
           options={[
             { value: 'none', label: 'Total' },
             { value: 'repo', label: 'By repo' },
+            ...(p.metric === 'lines' ? [{ value: 'lines' as const, label: 'Lines' }] : []),
           ]}
         />
       </Field>
